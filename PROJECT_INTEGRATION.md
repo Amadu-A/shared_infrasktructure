@@ -2,6 +2,20 @@
 
 Как подключить новый проект к shared infrastructure.
 
+## 0. # LLM Infrastructure Context
+
+Перед проектированием или изменением инфраструктуры:
+0. Перед разработкой прочитай LLM_CONTEXT.md и следуй указанным там инфраструктурным инструкциям
+1. Прочитай `docs/INFRASTRUCTURE_INSTRUCTIONS.md`.
+2. Прочитай `docs/services.yaml`.
+3. Не считай `docs/services.yaml` доказательством того, что контейнер сейчас запущен.
+4. Перед изменениями проверь runtime:
+   - docker ps
+   - docker network ls
+   - ss -lntp
+   - nvidia-smi
+5. Не создавай duplicate shared services.
+
 ## 1. Сначала прочитать
 
 ```text
@@ -20,7 +34,7 @@ docker compose ps
 ./scripts/check.sh
 ```
 
-Не считать сервис доступным только потому, что он описан в `services.yaml`.
+Не считать сервис доступным только потому, что он описан в `docs/services.yaml`.
 
 ## 3. Подключить только нужный application service к `ai-shared`
 
@@ -29,7 +43,7 @@ docker compose ps
 ```yaml
 services:
   api:
-    build: .
+    build: docs
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
       N8N_BASE_URL: http://n8n:5678

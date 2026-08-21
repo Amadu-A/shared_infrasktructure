@@ -37,11 +37,11 @@ shared-infrastructure/
 ├── .gitignore
 ├── README.md
 ├── SERVICES.md
-├── services.yaml
+├── PROJECT_INTEGRATION.md
 ├── docs/
 │   ├── INFRASTRUCTURE_INSTRUCTIONS.md
 │   ├── LLM_CONTEXT.md
-│   └── PROJECT_INTEGRATION.md
+│   └── services.yaml
 └── scripts/
     ├── bootstrap.sh
     └── check.sh
@@ -522,7 +522,7 @@ docs/LLM_CONTEXT.md
 docs/INFRASTRUCTURE_INSTRUCTIONS.md
 ```
 
-`services.yaml` описывает intended topology.
+`docs/services.yaml` описывает intended topology.
 
 Он НЕ заменяет runtime verification.
 
