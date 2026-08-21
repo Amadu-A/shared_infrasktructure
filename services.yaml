@@ -1,0 +1,111 @@
+schema_version: 1
+
+stack:
+  name: shared-infrastructure
+  compose_project_name: shared
+  recommended_directory: "~/projects/shared-infrastructure"
+  owner: shared-infrastructure
+  purpose: "Shared infrastructure for multiple application projects"
+
+networks:
+  ai_shared:
+    name: ai-shared
+    lifecycle: external
+    purpose: "Cross-project network for approved shared services"
+
+services:
+  ollama:
+    managed_here: true
+    lifecycle: shared
+    compose_service: ollama
+    docker_dns_name: ollama
+    network: ai-shared
+    protocol: http
+    internal_url: "http://ollama:11434"
+    host_bind_ip_env: SHARED_BIND_IP
+    host_port_env: OLLAMA_HOST_PORT
+    default_host_port: 11434
+    health:
+      host_url: "http://127.0.0.1:11434/api/tags"
+      command: "curl -fsS http://127.0.0.1:11434/api/tags"
+    gpu:
+      required: true
+      vendor: nvidia
+    notes:
+      - "Application projects must reuse this Ollama unless an exception is documented."
+      - "Required models are declared by application projects, not by this registry."
+
+  n8n:
+    managed_here: true
+    lifecycle: shared
+    compose_service: n8n
+    docker_dns_name: n8n
+    network: ai-shared
+    protocol: http
+    internal_url: "http://n8n:5678"
+    host_bind_ip_env: SHARED_BIND_IP
+    host_port_env: N8N_HOST_PORT
+    default_host_port: 5678
+    health:
+      host_url: "http://127.0.0.1:5678/healthz"
+      command: "curl -fsS http://127.0.0.1:5678/healthz"
+    storage:
+      database_service: n8n-db
+      database_shared_with_apps: false
+    notes:
+      - "Use project prefixes in workflow names, for example [PDRD] or [CONTRACT]."
+
+  rabbitmq:
+    managed_here: true
+    lifecycle: shared
+    compose_service: rabbitmq
+    docker_dns_name: rabbitmq
+    network: ai-shared
+    protocol: amqp
+    internal_endpoint: "rabbitmq:5672"
+    host_bind_ip_env: SHARED_BIND_IP
+    host_port_env: RABBITMQ_AMQP_HOST_PORT
+    default_host_port: 5672
+    management_port_env: RABBITMQ_MANAGEMENT_HOST_PORT
+    default_management_port: 15672
+    health:
+      command: "docker compose exec rabbitmq rabbitmq-diagnostics -q ping"
+    isolation:
+      recommended: "One vhost and one application user per project"
+
+  n8n-db:
+    managed_here: true
+    lifecycle: infrastructure-private
+    compose_service: n8n-db
+    network: n8n-internal
+    exposed_to_application_projects: false
+    notes:
+      - "This PostgreSQL instance belongs only to n8n."
+      - "Application projects must not use it as their project database."
+
+defaults_for_other_services:
+  postgres:
+    managed_here: false
+    lifecycle: project-specific-by-default
+  qdrant:
+    managed_here: false
+    lifecycle: project-specific-by-default
+  redis:
+    managed_here: false
+    lifecycle: project-specific-or-shared-by-explicit-decision
+  celery:
+    managed_here: false
+    lifecycle: project-specific
+  frontend:
+    managed_here: false
+    lifecycle: project-specific
+  backend:
+    managed_here: false
+    lifecycle: project-specific
+
+llm_rules:
+  - "Read docs/INFRASTRUCTURE_INSTRUCTIONS.md before designing project infrastructure."
+  - "Read this services.yaml before adding infrastructure dependencies."
+  - "Do not duplicate a service with managed_here=true without a documented exception."
+  - "Verify runtime state; this file declares intended topology, not proof that a container is currently running."
+  - "If server access is unavailable, request docker ps, docker network ls, ss -lntp and nvidia-smi output."
