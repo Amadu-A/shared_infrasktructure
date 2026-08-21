@@ -44,7 +44,8 @@ shared-infrastructure/
 │   └── services.yaml
 └── scripts/
     ├── bootstrap.sh
-    └── check.sh
+    ├── check.sh
+    └── pull-ollama-model.sh
 ```
 
 ---
