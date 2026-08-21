@@ -1,0 +1,7 @@
+# Shared Ollama model registry
+# One exact Ollama model tag per line.
+# Blank lines and lines beginning with # are ignored.
+
+qwen3-vl:8b-instruct
+qwen3-embedding:4b
+qwen3.8:27b
