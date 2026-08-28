@@ -54,7 +54,7 @@ services:
     environment:
       POSTGRES_DB: ${N8N_DB_NAME:-n8n}
       POSTGRES_USER: ${N8N_DB_USER:-n8n}
-      POSTGRES_PASSWORD: ${N8N_DB_PASSWORD:?N8N_DB_PASSWORD must be set in .env}
+      POSTGRES_PASSWORD: ${N8N_DB_PASSWORD:?N8N_DB_PASSWORD must be set in .env or process environment}
 
     volumes:
       - n8n-db-data:/var/lib/postgresql/data
@@ -88,10 +88,10 @@ services:
       DB_POSTGRESDB_PORT: 5432
       DB_POSTGRESDB_DATABASE: ${N8N_DB_NAME:-n8n}
       DB_POSTGRESDB_USER: ${N8N_DB_USER:-n8n}
-      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD:?N8N_DB_PASSWORD must be set in .env}
+      DB_POSTGRESDB_PASSWORD: ${N8N_DB_PASSWORD:?N8N_DB_PASSWORD must be set in .env or process environment}
       DB_POSTGRESDB_SCHEMA: public
 
-      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set in .env}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set in .env or process environment}
       N8N_PORT: 5678
       N8N_PROTOCOL: http
       N8N_SECURE_COOKIE: "false"
@@ -132,7 +132,7 @@ services:
 
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shared_admin}
-      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set in .env}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set in .env or process environment}
 
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
