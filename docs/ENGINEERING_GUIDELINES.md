@@ -1,3 +1,5 @@
+<!-- docs/ENGINEERING_GUIDELINES.md -->
+
 # Engineering Guidelines: Architecture, Code Style, Frontend and Configuration
 
 > **Назначение:** единый набор инженерных правил для проектов, которые проектируются или сопровождаются с использованием `shared-infrastructure`.
@@ -74,7 +76,7 @@ transport -> services/use_cases -> repositories
 относительный путь от корня проекта.
 
 Для файлов, синтаксис которых позволяет комментарий, относительный путь
-SHOULD также указываться первой строкой файла.
+MUST также указываться первой строкой файла.
 
 Пример Python:
 
@@ -83,16 +85,37 @@ SHOULD также указываться первой строкой файла.
 
 from __future__ import annotations
 ```
+
 Пример JavaScript:
-```
+
+```javascript
 // app/web/static/js/analysis.js
+
 ...
 ```
+
 Пример CSS:
-```
+
+```css
 /* app/web/static/css/blocks/_analysis.css */
+
 ...
 ```
+
+Для файлов, где комментарий в содержимом невозможен или нежелателен
+(например, JSON), путь MUST быть указан непосредственно перед code block:
+
+```text
+Файл: config/settings.json
+```
+
+LLM MUST NOT показывать несколько безымянных code blocks, если из ответа
+неочевидно, в какие файлы их сохранять.
+
+Если пользователь просит полный файл, LLM MUST показывать полное актуальное
+содержимое файла, а не только fragment/diff.
+
+---
 
 ### 2.1. Transport / Delivery
 
@@ -735,6 +758,139 @@ constants                     -> UPPER_CASE
 
 ---
 
+## 18.1. Документация каждого файла — обязательна
+
+Каждый source/config/script/template файл проекта MUST быть понятно
+задокументирован **на русском языке**.
+
+Документация должна отвечать минимум на вопросы:
+
+```text
+зачем существует этот файл;
+за какую ответственность он отвечает;
+какому слою / feature он принадлежит;
+с какими ключевыми компонентами взаимодействует;
+какие важные ограничения или side effects у него есть.
+```
+
+Документация MUST объяснять назначение, а не механически пересказывать код.
+
+Плохо:
+
+```python
+"""Файл с функциями."""
+```
+
+Хорошо:
+
+```python
+# app/application/use_cases/analyze_document.py
+
+"""
+Use-case запуска анализа документа.
+
+Модуль координирует получение документа, проверку допустимости запуска
+анализа и публикацию фоновой задачи. Он не содержит SQL и не знает
+о конкретной реализации брокера.
+"""
+```
+
+Для Python основной способ документирования файла — module docstring сразу
+после комментария с относительным путём.
+
+Для JavaScript/TypeScript SHOULD использоваться верхний block comment/JSDoc.
+
+Для CSS, YAML, shell scripts и templates SHOULD быть верхний комментарий,
+который объясняет назначение файла и нетривиальные ограничения.
+
+Для форматов, где комментарии синтаксически запрещены, например strict JSON,
+документация MUST находиться в ближайшем валидном source of truth:
+README, schema, соседнем Markdown-файле или документации компонента.
+
+Комментарии MUST поддерживаться в актуальном состоянии при изменении
+ответственности файла.
+
+---
+
+## 18.2. Документация функций, методов и классов
+
+Каждая созданная в проекте функция, метод и класс MUST иметь содержательную
+документацию **на русском языке**.
+
+Для Python MUST использоваться docstring.
+
+Минимальная документация объясняет:
+
+```text
+зачем существует функция/класс;
+какую ответственность выполняет;
+что принимает;
+что возвращает;
+какие значимые side effects имеет;
+какие ожидаемые исключения может выбросить;
+какие бизнес-ограничения важно понимать вызывающему коду.
+```
+
+Для простой функции допустим короткий docstring:
+
+```python
+def normalize_filename(filename: str) -> str:
+    """Нормализует имя файла перед безопасным сохранением в object storage."""
+```
+
+Для application/service operation нужен более содержательный docstring:
+
+```python
+class AnalyzeDocumentUseCase:
+    """
+    Запускает анализ ранее загруженного документа.
+
+    Use-case проверяет текущее состояние документа, не допускает повторный
+    параллельный запуск анализа и публикует фоновую задачу через application
+    port. Конкретный RabbitMQ/Celery client здесь не создаётся.
+    """
+
+    async def execute(self, document_id: UUID) -> AnalysisJob:
+        """
+        Создаёт задание анализа для документа.
+
+        Args:
+            document_id: Идентификатор документа текущего tenant.
+
+        Returns:
+            Созданное задание анализа.
+
+        Raises:
+            DocumentNotFoundError: Документ не найден.
+            AnalysisAlreadyRunningError: Анализ документа уже выполняется.
+        """
+```
+
+Документация MUST объяснять **почему и для чего**, если это неочевидно из
+имени. Бессмысленные docstrings вида:
+
+```text
+"Выполняет функцию."
+"Создаёт класс."
+"Возвращает результат."
+```
+
+запрещены.
+
+Комментарии внутри функции SHOULD объяснять причину нетривиального решения,
+инвариант, workaround или ограничение.
+
+Не нужно комментировать очевидную механику построчно:
+
+```python
+# Увеличиваем i на 1.
+i += 1
+```
+
+При изменении поведения функции/class её docstring MUST обновляться в том же PR.
+
+---
+
 ## 19. Размер функций и классов
 
 Не вводится искусственный жёсткий лимит строк.
@@ -824,11 +980,44 @@ worker/thread/process pool для CPU/blocking
 
 ---
 
-# Часть VII. Logging
+# Часть VII. Logging и observability
 
-## 23. Структурированные события
+## 23. Основной принцип логирования
 
-Логи SHOULD иметь стабильное имя события.
+Логирование MUST помогать ответить на вопросы:
+
+```text
+что произошло;
+в каком service/use-case;
+с каким correlation/request/job id;
+успешно ли завершилась операция;
+сколько времени она заняла;
+какая ошибка произошла;
+```
+
+Application services SHOULD писать logs в stdout/stderr.
+
+Не создавать собственные бесконечно растущие `.log` файлы внутри container
+без отдельной инфраструктурной причины.
+
+Логи SHOULD быть структурированными.
+
+Минимально рекомендуемые поля:
+
+```text
+timestamp
+level
+event
+service
+operation
+request_id / correlation_id
+user_id / tenant_id — только если допустимо
+job_id / task_id
+duration_ms
+status
+```
+
+Стабильное поле `event` предпочтительнее свободного текста.
 
 Пример:
 
@@ -839,27 +1028,273 @@ logger.info(
         "event": "review_committed",
         "session_id": str(session_id),
         "rows": len(rows),
+        "status": "success",
     },
 )
 ```
 
-Если выбран JSON logger — формат должен быть единым для проекта.
-
-Рекомендуемые поля:
-
-```text
-event
-request_id / correlation_id
-user_id (если допустимо)
-tenant_id
-job_id / task_id
-duration_ms
-status
-```
+Если выбран JSON logger, формат MUST быть единым для всего service.
 
 ---
 
-## 24. Что нельзя логировать
+## 23.1. Обязательное измерение времени service operations
+
+Каждая значимая публичная операция application service/use-case MUST
+логировать время выполнения через единый reusable decorator.
+
+К значимым операциям относятся, например:
+
+```text
+AnalyzeDocumentUseCase.execute
+UploadDocumentUseCase.execute
+GenerateReportUseCase.execute
+ImportKnowledgeBase.execute
+ML/LLM inference orchestration
+длительная обработка файла
+внешняя интеграция, latency которой важна для эксплуатации
+```
+
+Декоратор MUST использовать monotonic timer:
+
+```text
+time.perf_counter()
+```
+
+а не wall-clock subtraction через `datetime.now()`.
+
+В log MUST присутствовать:
+
+```text
+event=operation_timing
+operation=<stable operation name>
+duration_ms=<number>
+status=success|error
+```
+
+Пример базовой реализации:
+
+```python
+# app/core/observability.py
+
+"""
+Инструменты наблюдаемости для измерения времени ключевых операций.
+
+Модуль предоставляет единый timing-декоратор для application services.
+Он пишет одну итоговую запись на вызов и не дублирует traceback исключений.
+"""
+
+from __future__ import annotations
+
+import inspect
+import logging
+from collections.abc import Callable
+from functools import wraps
+from time import perf_counter
+from typing import Any, ParamSpec, TypeVar, cast
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+
+def log_execution_time(
+    *,
+    operation: str,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """
+    Создаёт декоратор для измерения времени ключевой операции service/use-case.
+
+    Декоратор пишет ровно одно событие `operation_timing` после завершения
+    вызова. При исключении он фиксирует `status=error`, но не пишет traceback:
+    traceback должен логироваться один раз в слое, который отвечает за
+    обработку необработанной ошибки.
+
+    Args:
+        operation: Стабильное имя операции для поиска и агрегации логов.
+
+    Returns:
+        Декоратор, сохраняющий интерфейс исходной функции.
+    """
+
+    def decorator(func: Callable[P, R]) -> Callable[P, R]:
+        """Оборачивает sync или async callable единым timing-логированием."""
+
+        logger = logging.getLogger(func.__module__)
+
+        if inspect.iscoroutinefunction(func):
+
+            @wraps(func)
+            async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+                """Измеряет время async-операции и пишет одно итоговое событие."""
+
+                started_at = perf_counter()
+                status = "success"
+
+                try:
+                    return await func(*args, **kwargs)
+                except Exception:
+                    status = "error"
+                    raise
+                finally:
+                    duration_ms = (perf_counter() - started_at) * 1000
+                    logger.info(
+                        "operation_timing",
+                        extra={
+                            "event": "operation_timing",
+                            "operation": operation,
+                            "duration_ms": round(duration_ms, 2),
+                            "status": status,
+                        },
+                    )
+
+            return cast(Callable[P, R], async_wrapper)
+
+        @wraps(func)
+        def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            """Измеряет время sync-операции и пишет одно итоговое событие."""
+
+            started_at = perf_counter()
+            status = "success"
+
+            try:
+                return func(*args, **kwargs)
+            except Exception:
+                status = "error"
+                raise
+            finally:
+                duration_ms = (perf_counter() - started_at) * 1000
+                logger.info(
+                    "operation_timing",
+                    extra={
+                        "event": "operation_timing",
+                        "operation": operation,
+                        "duration_ms": round(duration_ms, 2),
+                        "status": status,
+                    },
+                )
+
+        return sync_wrapper
+
+    return decorator
+```
+
+Применение:
+
+```python
+# app/application/use_cases/analyze_document.py
+
+class AnalyzeDocumentUseCase:
+    """Оркестрирует запуск анализа документа."""
+
+    @log_execution_time(operation="document_analysis")
+    async def execute(self, command: AnalyzeDocumentCommand) -> AnalysisResult:
+        """Выполняет основной use-case анализа документа."""
+        ...
+```
+
+Имя operation MUST быть стабильным и не содержать идентификаторы пользователя,
+UUID, filename и другие high-cardinality values.
+
+---
+
+## 23.2. Не превращать timing-декоратор в источник log spam
+
+Timing decorator MUST применяться к **значимым service/use-case operations**,
+а не механически к каждой функции проекта.
+
+По умолчанию НЕ декорировать:
+
+```text
+маленькие pure helpers;
+property/getter;
+простые mapper-функции;
+каждый repository CRUD method;
+функции внутри tight loop;
+вложенные функции одной уже измеряемой операции.
+```
+
+Если `AnalyzeDocumentUseCase.execute()` уже измеряет полную операцию, не нужно
+без причины создавать ещё десять одинаковых timing events для каждого
+внутреннего шага.
+
+Дополнительное измерение нижнего уровня допустимо, если latency этого шага
+важна отдельно:
+
+```text
+ollama_inference
+qdrant_search
+document_ocr
+external_api_request
+report_render
+```
+
+При этом имя события должно позволять отличить общий use-case от dependency
+operation.
+
+---
+
+## 23.3. Одна ошибка — один traceback
+
+Одна и та же exception MUST NOT записываться с traceback на каждом слое.
+
+Плохо:
+
+```text
+repository logger.exception(...)
+service logger.exception(...)
+router logger.exception(...)
+global middleware logger.exception(...)
+```
+
+для одной ошибки.
+
+Это создаёт четыре визуально разные ошибки вместо одной.
+
+Правило:
+
+- ожидаемые domain/application exceptions логируются на подходящем уровне без
+  лишнего traceback либо вообще преобразуются в ожидаемый response;
+- unexpected exception SHOULD иметь полный traceback ровно в одном
+  ответственном error boundary;
+- timing decorator фиксирует только `status=error` и `duration_ms`;
+- верхний HTTP/worker error handler MAY записать traceback один раз;
+- повторно логировать exception можно только если появляется новая полезная
+  информация или сформирована новая ошибка.
+
+---
+
+## 23.4. Уровни логирования
+
+Использовать уровни последовательно:
+
+```text
+DEBUG
+    диагностические детали, отключаемые в production
+
+INFO
+    успешные значимые business/system events
+    lifecycle
+    operation_timing
+
+WARNING
+    восстановимая проблема
+    retry
+    degraded behavior
+    неожиданное, но обработанное состояние
+
+ERROR
+    операция не выполнена
+    требуется анализ
+
+CRITICAL
+    service не способен корректно продолжать работу
+```
+
+Не использовать `ERROR` для обычной validation/business ситуации, если она
+является ожидаемой частью API contract.
+
+---
+
+## 23.5. Что нельзя логировать
 
 MUST NOT попадать в logs:
 
@@ -873,8 +1308,174 @@ SMTP password
 RabbitMQ password
 API key
 полный Authorization header
+полные credentials URL
 полный пользовательский документ без явной необходимости
+персональные данные без эксплуатационной необходимости
 ```
+
+Перед логированием external payload SHOULD использоваться allow-list нужных
+полей, а не dump всего объекта.
+
+---
+
+## 23.6. Ограниченный срок хранения и ротация
+
+Логи MUST иметь ограниченный размер и/или срок хранения.
+
+Запрещена конфигурация, при которой application/container log может расти
+бесконечно до заполнения диска.
+
+Для Docker Compose application services рекомендуемый baseline:
+
+```yaml
+# compose.yaml
+
+services:
+  api:
+    logging:
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "5"
+```
+
+`local` driver предпочтителен для простого single-host deployment, если
+централизованная logging platform не требует другой driver.
+
+Если используется `json-file`, rotation MUST быть включена явно:
+
+```yaml
+# compose.yaml
+
+services:
+  api:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+```
+
+Размеры `10m` и `5` — baseline, а не универсальное требование.
+Проект MAY выбрать другие значения исходя из traffic, disk capacity и
+incident-response требований, но retention MUST оставаться конечным.
+
+Docker log files MUST обслуживаться Docker logging driver.
+Нельзя писать cron/script, который вручную удаляет активные файлы Docker logs
+из `/var/lib/docker/...`.
+
+### 23.6.1. Если service пишет в обычный файл вне Docker
+
+Если по архитектурной причине service работает вне container и пишет logs
+непосредственно в файл, обычный `FileHandler` без rotation запрещён.
+
+MUST использоваться один из bounded вариантов:
+
+```text
+logging.handlers.RotatingFileHandler
+logging.handlers.TimedRotatingFileHandler
+system logrotate
+journald с ограниченной retention policy
+```
+
+Пример time-based rotation:
+
+```python
+# app/core/logging_config.py
+
+"""
+Конфигурация файлового логирования для non-container deployment.
+
+Файл включает ежедневную ротацию и автоматически удаляет архивы старше
+заданного количества backup-файлов, чтобы logs не заполняли диск.
+"""
+
+from logging.handlers import TimedRotatingFileHandler
+
+
+handler = TimedRotatingFileHandler(
+    filename="logs/service.log",
+    when="midnight",
+    interval=1,
+    backupCount=14,
+    encoding="utf-8",
+    utc=True,
+)
+```
+
+`backupCount` MUST быть больше нуля.
+
+Если retention регулируется внешним `logrotate`, application MUST NOT
+одновременно применять конфликтующую внутреннюю rotation policy.
+
+---
+
+## 23.7. Централизованные logs
+
+Если используется Loki, Elasticsearch/OpenSearch, Graylog, cloud logging или
+другая централизованная система:
+
+- retention MUST быть настроен явно;
+- срок хранения MUST соответствовать требованиям проекта;
+- debug logs SHOULD храниться меньше production operational logs;
+- sensitive fields MUST фильтроваться до отправки;
+- high-cardinality labels MUST NOT включать request_id/user_id/document_id,
+  если это создаёт взрыв cardinality;
+- application не должна одновременно бесконтрольно хранить полную копию logs
+  локально и в централизованном storage.
+
+Рекомендуемый baseline, если у проекта нет специальных требований:
+
+```text
+local rotated container logs: 50–100 MB максимум на container
+centralized dev/stage retention: 7–14 дней
+centralized production retention: 30 дней
+```
+
+Это SHOULD быть переопределено, если есть compliance/audit требования.
+
+---
+
+## 23.8. Защита от бесконечного множества логов
+
+Для high-frequency paths SHOULD применяться один или несколько механизмов:
+
+```text
+aggregation;
+sampling;
+rate limiting;
+метрики вместо log на каждое событие;
+один summary log после batch;
+лог только при изменении состояния;
+```
+
+Плохо:
+
+```text
+логировать каждый item внутри обработки 100 000 строк;
+логировать heartbeat каждую секунду на INFO;
+логировать polling "ничего не найдено" бесконечно;
+дублировать request start/request end на нескольких слоях.
+```
+
+Лучше:
+
+```text
+batch_completed rows=100000 duration_ms=...
+polling_summary attempts=60 events_found=0
+worker_heartbeat — DEBUG либо metric
+```
+
+Для массовых циклов SHOULD логироваться summary:
+
+```text
+processed_count
+failed_count
+skipped_count
+duration_ms
+```
+
+а подробности отдельных failed items — только если они нужны для диагностики.
 
 ---
 
@@ -1571,9 +2172,57 @@ Common API client должен централизовать:
 
 # Часть XIII. Testing
 
-## 50. Test pyramid по слоям
+## 50. Ключевая логика MUST быть покрыта тестами
 
-### Unit tests
+Вся ключевая логика service/application/domain MUST быть покрыта
+автоматическими тестами.
+
+Изменение ключевой логики без соответствующего test change MUST NOT
+приниматься в merge.
+
+К ключевой логике относятся минимум:
+
+```text
+business use-cases;
+domain rules;
+state transitions;
+валидация бизнес-ограничений;
+ветвление, влияющее на бизнес-результат;
+расчёты и преобразования данных;
+парсинг значимых входных форматов;
+idempotency;
+retry/error handling;
+transaction boundaries;
+permission/tenant rules;
+формирование критичных reports/results;
+оркестрация background jobs;
+LLM/ML decision pipeline вокруг model call;
+```
+
+Сам факт вызова external library не требует unit-test её внутренней реализации,
+но наша логика до/после этого вызова MUST быть проверена.
+
+---
+
+## 50.1. Минимальный набор сценариев для ключевого use-case
+
+Для каждого ключевого use-case SHOULD быть проверены минимум:
+
+```text
+happy path;
+ожидаемая business error;
+boundary/edge case;
+invalid state;
+permission/tenant boundary — если применимо;
+поведение при отказе обязательной dependency — если применимо.
+```
+
+Если исправляется production bug, regression test MUST воспроизводить ошибку
+до исправления и проходить после него.
+
+---
+
+## 50.2. Unit tests
 
 Use-case/domain tests SHOULD использовать fakes:
 
@@ -1582,47 +2231,108 @@ FakeDocumentRepository
 FakeObjectStorage
 FakeTaskPublisher
 FakeClock
+FakeLLMClient
 ```
 
 Они не требуют Docker или реальной БД.
 
-### Integration tests
+Unit tests SHOULD проверять поведение, а не внутреннее количество вызовов
+каждой private функции, если это не часть контракта.
 
-Проверяют:
+---
 
-- SQLAlchemy repositories;
-- PostgreSQL;
-- Qdrant;
-- RabbitMQ integration;
-- object storage adapter.
+## 50.3. Integration tests
 
-### API tests
+Infrastructure adapters SHOULD иметь integration tests там, где ошибка
+контракта вероятна или критична.
+
+Проверяются, например:
+
+```text
+SQLAlchemy repositories;
+PostgreSQL constraints/transactions;
+Qdrant integration;
+RabbitMQ publishing/consuming;
+object storage adapter;
+external API adapter contract;
+migration behavior.
+```
+
+Integration test не заменяет unit tests business logic.
+
+---
+
+## 50.4. API / Transport tests
 
 Проверяют transport contract:
 
 ```text
-status code
-request validation
-response schema
-auth
-error mapping
+status code;
+request validation;
+response schema;
+authentication;
+authorization;
+error mapping;
+content type;
+critical headers/cookies.
 ```
+
+Transport test не должен быть единственным тестом сложного use-case.
+
+---
+
+## 50.5. Coverage
+
+Coverage percentage — diagnostic metric, а не самоцель.
+
+Проект SHOULD измерять line/branch coverage в CI.
+
+При этом правило важнее процента:
+
+> критичная ветка business logic не может оставаться без теста только потому,
+> что общий coverage проекта уже высокий.
+
+Для critical modules SHOULD стремиться к максимально полному branch coverage.
+
+Исключения из coverage MUST быть обоснованы, а не использоваться для скрытия
+непроверенной логики.
 
 ---
 
 ## 51. Архитектурные тесты
 
-Для крупных проектов SHOULD добавить проверки границ.
+Для нетривиальных проектов SHOULD добавить автоматические проверки границ.
 
 Например:
 
 ```text
-domain не импортирует infrastructure
-application не импортирует FastAPI
-services не содержат SQLAlchemy queries
+domain не импортирует infrastructure;
+application не импортирует FastAPI;
+application не импортирует SQLAlchemy;
+services не содержат SQLAlchemy queries;
+infrastructure не создаётся внутри use-case;
 ```
 
 Это можно проверять отдельным test/lint script.
+
+---
+
+## 51.1. Tests и timing/logging
+
+Timing decorator SHOULD иметь unit tests минимум на:
+
+```text
+sync success;
+sync exception;
+async success;
+async exception;
+наличие duration_ms;
+наличие status;
+сохранение metadata исходной функции через functools.wraps.
+```
+
+Тесты logging не должны зависеть от точного значения duration.
+Проверяется наличие неотрицательного/положительного numeric `duration_ms`.
 
 ---
 
@@ -1630,18 +2340,29 @@ services не содержат SQLAlchemy queries
 
 ## 52. Перед merge
 
-Python-проект SHOULD иметь автоматические проверки:
+Python-проект MUST запускать automated tests в CI:
+
+```text
+pytest
+```
+
+Если PR изменяет ключевую logic, соответствующие tests MUST входить в тот же PR.
+
+Python-проект SHOULD иметь quality checks:
 
 ```text
 ruff check
 ruff format --check
-pytest
+coverage / branch coverage
 type checking — если принят в проекте
 ```
 
-Frontend при наличии toolchain SHOULD иметь аналогичные lint/format checks.
+Frontend при наличии toolchain SHOULD иметь аналогичные test/lint/format checks.
 
-Не вводить инструмент только ради формальности; выбранные checks должны запускаться в CI.
+Merge MUST быть заблокирован при падении обязательных tests.
+
+Не вводить инструмент только ради формальности; выбранные checks должны
+реально запускаться локально и/или в CI.
 
 ---
 
@@ -1691,7 +2412,10 @@ LLM MUST явно указать:
 - какие environment variables добавлены;
 - нужны ли изменения `.env.example`;
 - нужен ли новый secret/override в `.env`;
-- какие тесты подтверждают изменение.
+- какие тесты подтверждают изменение;
+- какие функции/classes получили или обновили русскую документацию;
+- какие ключевые service operations используют timing decorator;
+- как ограничены rotation/retention logs.
 
 ---
 
@@ -1773,6 +2497,11 @@ LLM MUST явно указать:
 - [ ] Исключения application/domain не являются `HTTPException`.
 - [ ] Public methods типизированы.
 - [ ] Logs не содержат secrets.
+- [ ] Каждый новый/изменённый source file имеет актуальную русскую документацию.
+- [ ] Все новые/изменённые функции, методы и классы имеют содержательные русские docstrings/comments.
+- [ ] Ключевые public service/use-case operations используют единый timing decorator.
+- [ ] Timing log содержит `operation`, `duration_ms` и `status`.
+- [ ] Один exception не создаёт одинаковый traceback на нескольких слоях.
 
 ---
 
@@ -1806,171 +2535,110 @@ LLM MUST явно указать:
 
 ---
 
-## 61. Tests
+## 61. Tests и observability
 
-- [ ] Unit tests покрывают business use-case.
+- [ ] Вся изменённая ключевая business/application/domain logic покрыта tests.
+- [ ] Happy path ключевого use-case проверен.
+- [ ] Business error и важные edge cases проверены.
+- [ ] Production bug fix содержит regression test.
 - [ ] Infrastructure adapters имеют integration tests при необходимости.
 - [ ] API contract проверен.
-- [ ] Ошибочные ветки проверены.
+- [ ] Timing decorator протестирован для sync/async success/error paths.
+- [ ] CI запускает обязательные tests.
 - [ ] Lint проходит.
 - [ ] Форматирование проходит.
+- [ ] Container/application logs имеют конечную rotation/retention policy.
+- [ ] High-frequency logic не создаёт бесконтрольный log spam.
 - [ ] Нет архитектурного обхода слоя «ради быстрого фикса».
 
 ---
 
-# Часть XVIII. Интеграция правил в `shared-infrastructure`
+# Часть XVIII. Использование Guidelines в новом проекте
 
-## 62. Новый источник истины
+## 62. Engineering baseline
 
-Рекомендуемый путь этого файла:
+Этот документ является общим engineering baseline для новых проектов.
 
-```text
-docs/ENGINEERING_GUIDELINES.md
-```
-
-Он должен быть обязательным source of truth для:
+Он описывает:
 
 ```text
-architecture planning
-backend code generation
-frontend code generation
-configuration design
-DI/SOLID review
-PR review
+architecture;
+dependency direction;
+DI / SOLID;
+data access;
+transactions;
+Python code style;
+документирование кода;
+frontend structure;
+configuration;
+logging / observability;
+testing;
+quality gates.
 ```
+
+Project-specific требования MAY уточнять этот baseline, если это необходимо
+для конкретного framework, deployment или business domain.
+
+Отклонение от MUST-rule требует явного объяснения причины.
 
 ---
 
-## 63. `docs/LLM_CONTEXT.md`
+## 63. Изучение существующего проекта
 
-`docs/LLM_CONTEXT.md` SHOULD перестать быть только infrastructure entrypoint.
-
-В начале нужен общий порядок:
-
-```text
-Перед планированием архитектуры или генерацией кода:
-
-1. Прочитать docs/ENGINEERING_GUIDELINES.md.
-2. Прочитать project-specific README/architecture docs.
-3. Если затрагивается infrastructure:
-   - прочитать docs/INFRASTRUCTURE_INSTRUCTIONS.md;
-   - прочитать docs/services.yaml;
-   - проверить runtime.
-4. Не дублировать shared services.
-5. Соблюдать DI/SOLID/frontend/configuration rules.
-```
-
----
-
-## 64. `README.md`
-
-В дереве repository добавить:
-
-```text
-docs/ENGINEERING_GUIDELINES.md
-```
-
-В «Источники истины» добавить его и для developer, и для LLM.
-
-Раздел `.env` SHOULD быть изменён.
-
-Не:
-
-```bash
-cp .env.example .env
-```
-
-а:
-
-```bash
-cat > .env <<'EOF'
-N8N_DB_PASSWORD=...
-N8N_ENCRYPTION_KEY=...
-RABBITMQ_DEFAULT_PASS=...
-EOF
-```
-
-То есть `.env` — только private overrides.
-
----
-
-## 65. `scripts/bootstrap.sh`
-
-Bootstrap SHOULD:
-
-- проверять наличие `.env`, если secrets обязательны;
-- проверять только обязательные secret variables;
-- НЕ требовать копировать весь `.env.example`;
-- НЕ предполагать, что `.env` содержит все non-secret settings;
-- валидировать Compose после загрузки sparse overrides.
-
-Пример логики:
-
-```bash
-required_vars=(
-  N8N_DB_PASSWORD
-  N8N_ENCRYPTION_KEY
-  RABBITMQ_DEFAULT_PASS
-)
-
-for var_name in "${required_vars[@]}"; do
-    if [[ -z "${!var_name:-}" ]]; then
-        echo "ERROR: ${var_name} is required"
-        exit 2
-    fi
-done
-```
-
----
-
-## 66. `PROJECT_INTEGRATION.md`
-
-В обязательное чтение добавить:
-
-```text
-docs/ENGINEERING_GUIDELINES.md
-```
-
-Также SHOULD использоваться только фактически существующие repository paths.
-
-Если файл лежит в корне:
-
-```text
-PROJECT_INTEGRATION.md
-```
-
-README и другие docs не должны ссылаться на:
-
-```text
-docs/PROJECT_INTEGRATION.md
-```
-
----
-
-## 67. Repository-wide consistency rule
-
-Любое новое правило MUST сопровождаться проверкой связанных файлов.
-
-Например, добавили новый source of truth:
-
-```text
-docs/ENGINEERING_GUIDELINES.md
-```
-
-LLM/developer проверяет минимум:
+Если проект уже существует, LLM MUST дополнительно изучить его актуальные
+источники:
 
 ```text
 README.md
-docs/LLM_CONTEXT.md
-PROJECT_INTEGRATION.md
-docs/INFRASTRUCTURE_INSTRUCTIONS.md
-scripts/
-CI
+pyproject.toml
+compose.yaml / docker-compose.yml
+package.json
+existing source tree
+tests
+migrations
+CI configuration
+project-specific architecture docs
 ```
 
-если они описывают тот же workflow.
+Нельзя механически перестраивать существующий проект только ради совпадения
+имён папок с примерами из этого документа.
 
-Запрещено добавлять новый обязательный документ и не подключать его из LLM entrypoint / README.
+Важны архитектурные границы и направление зависимостей, а не буквальное
+совпадение структуры каталогов.
+
+---
+
+## 64. Работа с противоречиями
+
+Если существующий проект, project-specific documentation и этот baseline
+противоречат друг другу, LLM MUST:
+
+1. явно указать противоречие;
+2. объяснить его техническое влияние;
+3. определить, какое решение соответствует текущим требованиям;
+4. предложить согласованное изменение связанных файлов;
+5. не распространять противоречивый legacy pattern на новый код без причины.
+
+Новое правило или изменение architecture/configuration MUST сопровождаться
+проверкой связанных файлов конкретного проекта, если они описывают тот же
+workflow.
+
+Это MAY включать:
+
+```text
+README.md
+architecture docs
+compose.yaml
+.env.example
+Settings/configuration
+logging configuration
+scripts
+CI
+tests
+```
+
+Не требуется менять файл только ради формальности, если новое правило на него
+не влияет.
 
 ---
 
@@ -2024,4 +2692,4 @@ Configuration:
 .env          -> sparse private/environment override
 ```
 
-Главная цель правил — не максимальное количество абстракций, а **правильное направление зависимостей, явные границы ответственности и возможность менять технические детали без переписывания бизнес-логики**.
+Главная цель правил — не максимальное количество абстракций, а **правильное направление зависимостей, явные границы ответственности, понятная русская документация, проверяемая тестами ключевая логика и наблюдаемость без бесконтрольного роста логов**.
