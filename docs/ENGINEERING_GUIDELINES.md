@@ -68,6 +68,32 @@ transport -> services/use_cases -> repositories
 
 Но даже в таком проекте MUST сохраняться то же направление зависимостей.
 
+### 2.0. Обязательное указание относительного пути файла
+
+При создании, изменении или демонстрации файла MUST быть явно указан его
+относительный путь от корня проекта.
+
+Для файлов, синтаксис которых позволяет комментарий, относительный путь
+SHOULD также указываться первой строкой файла.
+
+Пример Python:
+
+```python
+# app/application/use_cases/analyze_document.py
+
+from __future__ import annotations
+```
+Пример JavaScript:
+```
+// app/web/static/js/analysis.js
+...
+```
+Пример CSS:
+```
+/* app/web/static/css/blocks/_analysis.css */
+...
+```
+
 ### 2.1. Transport / Delivery
 
 Примеры:
