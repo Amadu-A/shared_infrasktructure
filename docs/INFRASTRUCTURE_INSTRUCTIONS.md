@@ -1,25 +1,29 @@
 # Infrastructure Development Instructions
 
 > Общий стандарт инфраструктуры, Docker Compose, shared services,
-> сетевого взаимодействия и разработки микросервисов.
+> сетевого взаимодействия и конфигурации новых проектов.
 >
-> Документ предназначен для:
->
-> - backend-разработчиков;
-> - frontend-разработчиков;
-> - DevOps-инженеров;
-> - AI/ML-инженеров;
-> - LLM / AI coding agents.
->
-> Любой новый проект на сервере MUST проектироваться с учётом этих правил.
+> Документ предназначен для разработчиков, DevOps/AI инженеров и
+> LLM / AI coding agents.
+
+Этот документ входит в переносимый instruction bundle:
+
+```text
+docs/
+├── LLM_CONTEXT.md
+├── ENGINEERING_GUIDELINES.md
+├── INFRASTRUCTURE_INSTRUCTIONS.md
+└── services.yaml
+```
+
+Начинать работу LLM SHOULD с `LLM_CONTEXT.md`.
 
 ---
 
 ## 1. Основной принцип
 
-На одном физическом сервере могут одновременно работать несколько независимых проектов.
-
-Пример:
+На одном физическом сервере могут одновременно работать несколько независимых
+проектов.
 
 ```text
 Server
@@ -32,28 +36,106 @@ Server
 Проекты MUST:
 
 1. не конфликтовать по host ports;
-2. не конфликтовать по именам контейнеров;
-3. не конфликтовать по Docker volumes;
-4. не конфликтовать по Docker networks;
-5. не создавать дублирующую shared-инфраструктуру без необходимости;
-6. иметь изолированные данные;
-7. иметь независимый lifecycle приложения;
-8. переиспользовать общие инфраструктурные сервисы там, где это предусмотрено архитектурой.
+2. не конфликтовать по именам Compose projects;
+3. не конфликтовать по volumes;
+4. не конфликтовать по private networks;
+5. не создавать дублирующую shared infrastructure без необходимости;
+6. иметь изолированные application data;
+7. иметь независимый lifecycle;
+8. переиспользовать утверждённые shared services.
+
+Главная модель:
+
+```text
+Share infrastructure.
+Isolate application state.
+Keep project lifecycle independent.
+Do not expose ports unnecessarily.
+Discover infrastructure before creating infrastructure.
+```
 
 ---
 
 ## 2. MUST / SHOULD / MAY
 
-В документе используются следующие обозначения.
-
 - **MUST** — обязательное правило.
 - **MUST NOT** — запрещённое действие.
-- **SHOULD** — рекомендуемое решение; отклонение допустимо только при наличии причины.
+- **SHOULD** — решение по умолчанию; отклонение требует причины.
 - **MAY** — допустимый вариант.
 
 ---
 
-## 3. Рекомендуемая структура сервера
+## 3. Категории сервисов
+
+Все сервисы делятся на:
+
+```text
+SHARED INFRASTRUCTURE
+PROJECT SERVICES
+```
+
+### Shared infrastructure
+
+Типичные shared services:
+
+```text
+Ollama
+RabbitMQ
+n8n
+reverse proxy
+Prometheus
+Grafana
+Loki
+```
+
+В отдельных случаях MAY быть shared:
+
+```text
+Qdrant
+Redis
+PostgreSQL
+```
+
+только при явной логической изоляции.
+
+### Project services
+
+По умолчанию project-specific:
+
+```text
+backend
+frontend
+Celery worker
+Celery beat
+application PostgreSQL
+application Qdrant
+application Redis
+migrations
+application background workers
+```
+
+Они MUST иметь независимый lifecycle.
+
+---
+
+## 4. Shared infrastructure registry
+
+Канонический machine-readable registry этого repository:
+
+```text
+docs/services.yaml
+```
+
+Если папка `docs/` передана LLM отдельно, используется предоставленный
+`services.yaml` из instruction bundle.
+
+Registry описывает **intended topology**, а не фактический runtime state.
+
+Перед изменением инфраструктуры MUST дополнительно проверить runtime.
+
+---
+
+## 5. Рекомендуемая структура сервера
 
 ```text
 /home/<user>/
@@ -63,93 +145,33 @@ Server
     │   ├── .env
     │   ├── .env.example
     │   ├── README.md
-    │   ├── SERVICES.md
-    │   └── services.yaml
+    │   └── docs/
+    │       ├── LLM_CONTEXT.md
+    │       ├── ENGINEERING_GUIDELINES.md
+    │       ├── INFRASTRUCTURE_INSTRUCTIONS.md
+    │       └── services.yaml
     │
     ├── project-a/
     │   ├── compose.yaml
     │   ├── .env
     │   └── ...
     │
-    ├── project-b/
-    │   ├── compose.yaml
-    │   ├── .env
-    │   └── ...
-    │
-    └── project-c/
+    └── project-b/
         ├── compose.yaml
         ├── .env
         └── ...
 ```
 
-Shared-инфраструктура MUST храниться отдельно от бизнес-проектов.
+Shared infrastructure MUST храниться отдельно от business projects.
 
 ---
 
-## 4. Категории сервисов
+## 6. Ollama
 
-Все Docker-сервисы делятся на две основные категории:
+Ollama SHOULD быть единым shared service на одном GPU host, если нет
+документированной причины изолировать runtime.
 
-```text
-SHARED INFRASTRUCTURE
-PROJECT SERVICES
-```
-
----
-
-## 5. Shared Infrastructure
-
-Shared Infrastructure — сервисы, которыми могут пользоваться несколько проектов.
-
-Типичные shared services:
-
-```text
-Ollama
-RabbitMQ
-n8n
-Nginx / Traefik
-Prometheus
-Grafana
-Loki
-```
-
-В отдельных случаях также MAY быть shared:
-
-```text
-Qdrant
-Redis
-PostgreSQL
-```
-
-Но только при наличии строгой логической изоляции данных.
-
----
-
-## 6. Project Services
-
-Следующие компоненты обычно принадлежат конкретному проекту:
-
-```text
-Backend
-Frontend
-Celery Worker
-Celery Beat
-project-specific PostgreSQL
-project-specific Qdrant
-project-specific Redis
-project-specific migrations
-project-specific background workers
-```
-
-Они MUST иметь независимый lifecycle от других проектов.
-
----
-
-## 7. Ollama
-
-Ollama SHOULD быть единым shared-сервисом на GPU-сервере.
-
-Без специальной причины запрещено создавать:
+Не создавать без необходимости:
 
 ```text
 project-a-ollama
@@ -157,72 +179,64 @@ project-b-ollama
 project-c-ollama
 ```
 
-на одном физическом GPU.
-
 Причины:
 
-- модели занимают много дискового пространства;
-- модели занимают VRAM;
-- несколько Ollama конкурируют за один GPU;
-- сложнее контролировать загрузку GPU;
-- одинаковые модели скачиваются несколько раз.
+- duplicate models на диске;
+- конкуренция за VRAM;
+- сложнее ограничивать parallelism;
+- сложнее обновлять runtime;
+- lifecycle одного приложения начинает влиять на другие.
 
 Правильная схема:
 
 ```text
-               Ollama
-                  │
-        ┌─────────┼─────────┐
-        │         │         │
-    Project A Project B Project C
+               shared Ollama
+                     │
+        ┌────────────┼────────────┐
+        │            │            │
+    Project A    Project B    Project C
 ```
 
-Все приложения получают URL Ollama через environment variable:
+Application URL передавать через configuration:
 
 ```dotenv
 OLLAMA_BASE_URL=http://ollama:11434
 ```
 
-Hardcoded URL запрещён.
+Hardcoded infrastructure URL запрещён.
 
-Неправильно:
+Неправильно внутри container:
 
-```python
-OLLAMA_URL = "http://localhost:11434"
+```text
+http://localhost:11434
 ```
 
-Правильно:
-
-```python
-OLLAMA_URL = os.getenv(
-    "OLLAMA_BASE_URL",
-    "http://ollama:11434",
-)
-```
+если Ollama работает в другом container.
 
 ---
 
-## 8. GPU
+## 7. GPU
 
-GPU считается shared physical resource.
+GPU — shared physical resource.
 
-Перед разработкой AI-сервиса MUST быть определено:
+Перед проектированием AI-service MUST определить:
 
-- какая модель используется;
-- сколько VRAM она требует;
-- сколько моделей может быть загружено одновременно;
-- может ли сервис работать через очередь;
-- нужно ли ограничивать параллелизм.
+- модель;
+- ожидаемое потребление VRAM;
+- context size;
+- сколько моделей может быть loaded одновременно;
+- допустимый parallelism;
+- нужна ли очередь;
+- допустима ли CPU fallback;
+- как диагностируется загрузка GPU.
 
-Приложение MUST NOT исходить из предположения, что вся GPU принадлежит только ему.
-
-Проверка GPU на Linux:
+Проверка host:
 
 ```bash
 nvidia-smi
 ```
 
-Проверка GPU внутри Docker:
+Проверка внутри Docker:
 
 ```bash
 docker run --rm \
@@ -231,7 +245,7 @@ docker run --rm \
   nvidia-smi
 ```
 
-Проверка загрузки VRAM:
+Память:
 
 ```bash
 nvidia-smi \
@@ -239,20 +253,21 @@ nvidia-smi \
   --format=csv
 ```
 
+Application MUST NOT исходить из предположения, что вся GPU принадлежит ему.
+
 ---
 
-## 9. RabbitMQ
+## 8. RabbitMQ
 
-RabbitMQ SHOULD быть shared-сервисом.
+RabbitMQ SHOULD быть shared service.
 
-Проекты MUST быть логически разделены.
+Projects MUST быть логически разделены.
 
-Предпочтительный способ — RabbitMQ Virtual Hosts:
+Предпочтительно:
 
 ```text
-/project-a
-/project-b
-/project-c
+one vhost per project
+one application user per project
 ```
 
 Пример:
@@ -267,127 +282,102 @@ RABBITMQ_URL=amqp://project_a_user:password@rabbitmq:5672/project-a
 RABBITMQ_URL=amqp://project_b_user:password@rabbitmq:5672/project-b
 ```
 
-Очереди разных проектов MUST NOT случайно пересекаться.
+Application projects SHOULD NOT использовать bootstrap admin account.
 
 ---
 
-## 10. Celery
+## 9. Celery
 
-Celery MUST NOT рассматриваться как shared infrastructure.
-
-Celery Worker исполняет код конкретного приложения.
-
-Правильно:
+Celery worker и Celery beat являются project-specific, потому что исполняют
+код конкретного приложения.
 
 ```text
-RabbitMQ
-   │
-   ├── project-a-celery
-   └── project-b-celery
+shared RabbitMQ
+      │
+      ├── project-a-celery
+      └── project-b-celery
 ```
 
-Каждый проект MUST иметь собственный `celery-worker` / `celery-beat`, если они ему нужны.
+Celery MUST NOT автоматически переноситься в shared infrastructure.
 
 ---
 
-## 11. n8n
+## 10. n8n
 
 n8n MAY быть shared.
 
-Для development/internal environments рекомендуется:
+Для internal/development environments допустима схема:
 
 ```text
-1 server
-1 n8n
-N workflows
+one server
+one n8n
+many workflows
 ```
 
-Например:
+Workflow names SHOULD иметь project namespace:
 
 ```text
-n8n
-├── [PDRD] Analysis Main
-├── [CONTRACT] Analyze Contract
-└── [AVAILABILITY] Daily Scan
+[PDRD] Analysis Main
+[CONTRACT] Analyze Contract
 ```
 
-Для production отдельный экземпляр n8n MAY использоваться, если нужны:
+Отдельный n8n MAY быть нужен при:
 
-- независимые обновления;
-- разные версии n8n;
-- разные security policies;
-- независимые backups;
-- строгая tenant isolation.
+- независимых update windows;
+- разных версиях;
+- разных security policies;
+- строгой tenant isolation;
+- независимых backups.
 
 ---
 
-## 12. PostgreSQL
+## 11. PostgreSQL
 
-Есть два допустимых варианта.
+### Вариант A — PostgreSQL per project
 
-### Variant A — PostgreSQL per project
+Рекомендуется по умолчанию.
 
 ```text
 project-a-postgres
 project-b-postgres
 ```
 
-Рекомендуется по умолчанию для независимых проектов.
+Оба containers могут использовать internal port `5432`.
 
-Внутренний порт у всех может быть одинаковым:
+Host port не нужен, если к БД обращаются только containers проекта.
 
-```text
-5432
-```
+### Вариант B — shared PostgreSQL
 
-Это НЕ является конфликтом, если порт не публикуется одинаково на host.
-
-### Variant B — shared PostgreSQL
-
-Допускается:
-
-```text
-postgres
-├── project_a_db
-├── project_b_db
-└── project_c_db
-```
+Допустим только при осознанном решении.
 
 Каждый проект MUST иметь:
 
 - отдельную database;
 - отдельного user;
 - отдельный password;
-- минимальные permissions.
+- минимальные privileges;
+- независимую backup/restore strategy.
+
+n8n private PostgreSQL из shared stack MUST NOT использоваться как
+application database.
 
 ---
 
-## 13. Qdrant
+## 12. Qdrant
 
-По умолчанию Qdrant MAY быть project-specific.
+По умолчанию Qdrant SHOULD быть project-specific.
 
-Например:
+При shared Qdrant collections MUST иметь project namespace.
 
-```text
-project-a-qdrant
-project-b-qdrant
-```
-
-Оба используют внутри контейнера `6333` без конфликтов.
-
-При shared Qdrant collections MUST иметь namespace проекта.
-
-Правильно:
+Хорошо:
 
 ```text
 pdrd_normative_v2
-pdrd_experience_v2
-
 contract_ai_documents_v1
 contract_ai_knowledge_v1
 ```
 
-Запрещены слишком общие имена:
+Плохо:
 
 ```text
 documents
@@ -399,13 +389,11 @@ collection1
 
 ---
 
-## 14. Redis
+## 13. Redis
 
-Redis MAY быть shared.
+Redis MAY быть project-specific или shared по явному решению.
 
-При shared Redis проекты MUST быть разделены.
-
-Предпочтительно использовать key prefix:
+При shared Redis использовать isolation, например:
 
 ```text
 pdrd:
@@ -413,171 +401,138 @@ contract-ai:
 availability-agent:
 ```
 
-При критичных данных предпочтительны отдельные Redis instances или отдельные ACL users.
+Для критичных данных предпочтительны ACL users или отдельные instances.
 
 ---
 
-## 15. Frontend
+## 14. Frontend
 
-Frontend является project-specific сервисом.
+Frontend является project-specific service.
 
-Например:
+Для development MAY использоваться отдельный host port.
 
-```text
-project-a-frontend
-project-b-frontend
-```
-
-Для development MAY использоваться разные host ports:
-
-```text
-project-a → 8080
-project-b → 8081
-project-c → 8082
-```
-
-Production SHOULD использовать общий reverse proxy.
+Production SHOULD публиковать frontend/backend через общий reverse proxy,
+а не накапливать большое количество публичных портов.
 
 ---
 
-## 16. Reverse Proxy
+## 15. Reverse proxy
 
-На сервере SHOULD быть один общий reverse proxy, например Nginx или Traefik.
-
-```text
-                       80 / 443
-                          │
-                     Reverse Proxy
-                          │
-          ┌───────────────┼───────────────┐
-          │               │               │
-       PDRD UI       Contract UI         n8n
-```
-
-Это предпочтительнее схемы с большим количеством внешних портов:
+На одном host SHOULD быть общий reverse proxy, например Nginx или Traefik.
 
 ```text
-:8080
-:8081
-:8082
-:8083
-:8084
+                     80 / 443
+                        │
+                  Reverse Proxy
+                        │
+          ┌─────────────┼─────────────┐
+          │             │             │
+       PDRD UI      Contract UI      n8n
 ```
 
 ---
 
-## 17. Docker ports
+## 16. Container port и host port
 
-Необходимо различать:
+Не путать:
 
 ```text
 container port
 host port
 ```
 
-Например:
+Container-to-container communication через Docker network не требует
+публикации host port.
 
-```yaml
-services:
-  postgres:
-    image: postgres:16
-```
-
-PostgreSQL внутри Docker доступен как:
+Например PostgreSQL доступен как:
 
 ```text
 postgres:5432
 ```
 
-даже если секции `ports` вообще нет.
+даже без секции `ports`.
+
+Internal databases, Redis и brokers SHOULD NOT публиковать host ports только
+ради связи containers.
 
 ---
 
-## 18. Не публиковать внутренние сервисы без необходимости
+## 17. Настраиваемые host ports
 
-Внутренние сервисы SHOULD NOT публиковать host ports.
+Host ports, которые действительно нужны, MUST быть configurable через
+environment variables или Compose parameters.
 
-Не рекомендуется:
-
-```yaml
-postgres:
-  ports:
-    - "5432:5432"
-
-redis:
-  ports:
-    - "6379:6379"
-```
-
-если к ним обращаются только Docker-контейнеры.
-
-Backend должен обращаться к ним через Docker DNS:
-
-```text
-postgres:5432
-redis:6379
-```
-
----
-
-## 19. Настраиваемые host ports
-
-Если сервис действительно должен быть доступен с host, порт MUST задаваться через `.env`.
-
-```dotenv
-FRONTEND_PORT=8080
-API_PORT=8101
-```
-
-Compose:
+Пример:
 
 ```yaml
 ports:
-  - "${FRONTEND_PORT}:80"
+  - "${API_BIND_IP:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
 ```
 
-Жёстко заданные host ports SHOULD избегаться в проектах, которые будут размещаться рядом с другими проектами.
+Это **не означает**, что переменные MUST находиться в `.env`.
+
+Baseline non-secret value может быть:
+
+1. безопасным default в Compose;
+2. документированным в `.env.example`.
+
+`.env` добавляет только environment-specific override.
 
 ---
 
-## 20. localhost внутри Docker
+## 18. Binding interfaces
 
-Критически важное правило:
-
-В контейнере `localhost` означает текущий контейнер, а НЕ Docker host и НЕ другой контейнер.
-
-Запрещено:
+Безопасный default для административных/internal interfaces:
 
 ```text
-http://localhost:11434
+127.0.0.1
 ```
 
-если Ollama находится в другом контейнере.
+`0.0.0.0` означает bind на всех interfaces host.
 
-Использовать Docker service name:
+Он MAY использоваться только осознанно, когда внешняя доступность действительно
+нужна и есть соответствующая network protection.
+
+Для разных сервисов MAY использоваться разные bind variables:
+
+```text
+SHARED_BIND_IP
+N8N_BIND_IP
+RABBITMQ_BIND_IP
+```
+
+Это позволяет, например, открыть Ollama для LAN, но оставить RabbitMQ
+Management только на localhost.
+
+---
+
+## 19. localhost внутри Docker
+
+В container:
+
+```text
+localhost
+127.0.0.1
+```
+
+означают текущий container.
+
+Для другого service использовать Docker DNS:
 
 ```text
 http://ollama:11434
+http://n8n:5678
+rabbitmq:5672
+postgres:5432
 ```
-
-или DNS name shared infrastructure.
 
 ---
 
-## 21. Docker Networks
+## 20. Docker networks
 
-Каждый проект SHOULD иметь собственную private network.
+Каждый application project SHOULD иметь private network.
 
-Например:
-
-```text
-project-a-internal
-project-b-internal
-```
-
-Shared infrastructure MUST иметь общую external network.
-
-Стандартное имя:
+Shared infrastructure использует external network:
 
 ```text
 ai-shared
@@ -589,7 +544,7 @@ ai-shared
 docker network create ai-shared
 ```
 
-В infrastructure Compose:
+Shared Compose:
 
 ```yaml
 networks:
@@ -604,49 +559,20 @@ networks:
   default:
   ai-shared:
     external: true
+    name: ai-shared
 ```
 
-Сервис, которому нужен Ollama:
+Только service, которому нужен shared dependency, подключается к `ai-shared`.
 
-```yaml
-backend:
-  networks:
-    - default
-    - ai-shared
-```
-
-PostgreSQL конкретного проекта SHOULD находиться только в private network проекта.
+Project PostgreSQL SHOULD оставаться только в private network проекта.
 
 ---
 
-## 22. Пример network architecture
-
-```text
-                         ai-shared
-                             │
-       ┌─────────────────────┼────────────────────┐
-       │                     │                    │
-     Ollama                 n8n               RabbitMQ
-       │                     │                    │
-       │                     │                    │
- ┌─────┴─────┐        ┌──────┴──────┐      ┌─────┴─────┐
- │ Project A │        │ Project B   │      │ Project C │
- └───────────┘        └─────────────┘      └───────────┘
-       │
-       │ project-a-internal
-       │
- ┌─────┼─────────┐
- │     │         │
-API  PostgreSQL Qdrant
-```
-
----
-
-## 23. `container_name`
+## 21. `container_name`
 
 `container_name` SHOULD NOT использоваться без необходимости.
 
-Не рекомендуется:
+Плохо:
 
 ```yaml
 services:
@@ -654,66 +580,51 @@ services:
     container_name: postgres
 ```
 
-Предпочтительно:
-
-```yaml
-services:
-  postgres:
-    image: postgres:16
-```
-
-Docker Compose создаст имена автоматически с project prefix.
+Предпочтительно доверить Compose формирование имени с project prefix.
 
 ---
 
-## 24. Compose project name
+## 22. Compose project name
 
 Каждый Compose stack MUST иметь уникальное project name.
 
-Предпочтительный способ:
+Пример:
 
 ```dotenv
-COMPOSE_PROJECT_NAME=pdrd
+COMPOSE_PROJECT_NAME=contract-ai
 ```
 
 Shared stack:
 
-```dotenv
-COMPOSE_PROJECT_NAME=shared
+```text
+shared
 ```
 
-Другие проекты:
-
-```dotenv
-COMPOSE_PROJECT_NAME=contract-ai
-COMPOSE_PROJECT_NAME=availability-agent
-```
+Project name MAY задаваться через `name:` в Compose или через environment,
+но итоговое имя MUST быть предсказуемым и уникальным.
 
 ---
 
-## 25. Volumes
+## 23. Volumes
 
-Persistent volumes MUST быть привязаны к проекту.
+Persistent volumes MUST быть изолированы по ownership.
 
 Примеры:
 
 ```text
 shared_ollama_data
 shared_n8n_data
-
-pdrd_postgres_data
-pdrd_qdrant_data
-
 contract_ai_postgres_data
+pdrd_qdrant_data
 ```
 
-Независимые PostgreSQL MUST NOT использовать один и тот же volume.
+Независимые PostgreSQL MUST NOT использовать один data volume.
 
 ---
 
-## 26. Environment Variables
+## 24. Environment variables
 
-Все инфраструктурные адреса MUST передаваться через environment variables.
+Infrastructure addresses MUST передаваться через configuration.
 
 Пример:
 
@@ -726,20 +637,112 @@ REDIS_URL=redis://redis:6379
 N8N_BASE_URL=http://n8n:5678
 ```
 
-Hardcoded infrastructure URLs запрещены.
+Hardcoded environment-specific URLs запрещены в application logic.
 
 ---
 
-## 27. `.env.example`
+## 25. `.env.example` и `.env`
 
-Каждый проект MUST содержать `.env.example`.
+Каждый project MUST содержать `.env.example`.
+
+### `.env.example`
+
+Это committed baseline и полный каталог поддерживаемых environment variables.
 
 Он MUST:
 
-- содержать все необходимые переменные;
-- НЕ содержать настоящие passwords;
-- НЕ содержать production secrets;
-- описывать значения по умолчанию.
+- быть в Git;
+- содержать non-secret defaults;
+- содержать placeholders вместо настоящих secrets;
+- отражать текущую configuration schema;
+- позволять понять configuration без доступа к production `.env`.
+
+### `.env`
+
+Это private sparse override.
+
+Он SHOULD содержать только:
+
+```text
+real secrets
+environment-specific overrides
+```
+
+Например:
+
+```dotenv
+SECRET_KEY=...
+POSTGRES_PASSWORD=...
+APP_ENV=prod
+```
+
+Он SHOULD NOT быть полной копией `.env.example`.
+
+Добавление новой non-secret настройки SHOULD требовать изменения:
+
+```text
+Settings/config schema
+.env.example
+Compose/application default, если нужен
+```
+
+и не должно заставлять обновлять каждый существующий `.env`.
+
+---
+
+## 26. Pydantic Settings precedence
+
+Для Python/Pydantic проектов рекомендуемый baseline:
+
+```python
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=(".env.example", ".env"),
+        case_sensitive=False,
+        env_nested_delimiter="__",
+    )
+```
+
+Порядок:
+
+```text
+.env.example
+    ↓ overridden by
+.env
+    ↓ overridden by
+real process environment
+```
+
+Если проект использует prefix, он MAY быть задан через `env_prefix`.
+
+---
+
+## 27. Docker Compose env precedence
+
+Docker Compose не следует считать эквивалентом Pydantic Settings.
+
+Compose **не обязан автоматически загружать `.env.example`**.
+
+Поэтому для Compose:
+
+- non-secret baseline SHOULD иметь default через `${VAR:-default}`;
+- required secrets SHOULD использовать `${VAR:?message}`;
+- `.env` остаётся sparse override;
+- `.env.example` документирует полный каталог variables.
+
+Пример:
+
+```yaml
+services:
+  api:
+    ports:
+      - "${API_BIND_IP:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
+```
 
 ---
 
@@ -753,11 +756,11 @@ private keys
 tokens
 passwords
 API keys
-N8N encryption keys
-database dumps containing secrets
+encryption keys
+database dumps with secrets
 ```
 
-`.gitignore` MUST включать:
+`.gitignore` SHOULD включать:
 
 ```gitignore
 .env
@@ -765,40 +768,40 @@ database dumps containing secrets
 !.env.example
 ```
 
+Production secrets MUST NOT печататься в logs или diagnostic output.
+
 ---
 
-## 29. Healthcheck
+## 29. Health endpoints
 
-Каждый HTTP microservice MUST предоставлять как минимум:
+Каждый HTTP backend SHOULD предоставлять:
 
 ```text
 GET /health/live
 GET /health/ready
 ```
 
-`live` отвечает: процесс жив?
+`live` — процесс жив.
 
-`ready` отвечает: может ли сервис сейчас обслуживать запросы?
+`ready` — service может принимать рабочие запросы.
 
-Readiness MAY проверять PostgreSQL, Qdrant, Ollama, RabbitMQ и другие обязательные зависимости.
+Readiness MAY проверять обязательные dependencies.
 
 ---
 
 ## 30. Docker healthcheck
 
-Compose SHOULD содержать healthcheck.
+Compose SHOULD содержать healthcheck для long-running services.
 
 Пример:
 
 ```yaml
 healthcheck:
   test:
-    [
-      "CMD",
-      "curl",
-      "-f",
-      "http://localhost:8000/health/live"
-    ]
+    - CMD
+    - curl
+    - -f
+    - http://localhost:8000/health/live
   interval: 30s
   timeout: 5s
   retries: 3
@@ -808,7 +811,8 @@ healthcheck:
 
 ## 31. `depends_on`
 
-Если сервис зависит от готовности другого сервиса, SHOULD использоваться condition:
+Если start зависит от readiness другого service, SHOULD использовать
+health condition там, где Compose version это поддерживает:
 
 ```yaml
 depends_on:
@@ -816,336 +820,36 @@ depends_on:
     condition: service_healthy
 ```
 
-Обычный `depends_on` гарантирует порядок запуска, но не готовность зависимости принимать запросы.
+Обычный startup order не доказывает readiness.
 
 ---
 
-## 32. Проверка существующей инфраструктуры перед разработкой
+## 32. Discovery перед добавлением infrastructure
 
-Перед добавлением нового infrastructure service разработчик или LLM MUST проверить:
+Перед добавлением нового service разработчик или LLM MUST выяснить:
 
-- существует ли сервис уже;
-- как он называется;
-- в какой Docker network находится;
-- какой внутренний порт использует;
-- какой host port опубликован;
-- какой URL должен использовать проект.
+- существует ли такой service;
+- кто им управляет;
+- Docker service name;
+- network;
+- internal port;
+- опубликован ли host port;
+- какой URL должен использовать project;
+- как проверяется health;
+- как изолируются credentials/data.
 
-Нельзя автоматически добавлять новый Ollama / RabbitMQ / n8n / Redis / Qdrant / PostgreSQL, не проверив существующую инфраструктуру.
-
----
-
-## 33. Проверка Docker
-
-```bash
-docker --version
-docker compose version
-docker info
-systemctl status docker --no-pager
-```
+Нельзя автоматически добавлять Ollama, RabbitMQ, n8n, Redis, Qdrant или
+PostgreSQL, не проверив существующую инфраструктуру и project requirements.
 
 ---
 
-## 34. Список контейнеров
-
-Запущенные:
-
-```bash
-docker ps
-```
-
-Информативно:
-
-```bash
-docker ps \
-  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-```
-
-Все, включая остановленные:
-
-```bash
-docker ps -a
-```
-
----
-
-## 35. Проверка Docker Networks
-
-```bash
-docker network ls
-```
-
-Shared network:
-
-```bash
-docker network inspect ai-shared
-```
-
-Если отсутствует:
-
-```bash
-docker network create ai-shared
-```
-
----
-
-## 36. Проверка занятого host port
-
-```bash
-sudo ss -lntp
-```
-
-Конкретный порт:
-
-```bash
-sudo ss -lntp | grep ':11434'
-sudo ss -lntp | grep ':5678'
-sudo ss -lntp | grep ':6333'
-```
-
----
-
-## 37. Проверка порта
-
-```bash
-nc -zv localhost 11434
-nc -zv localhost 5678
-```
-
-Если `nc` отсутствует:
-
-```bash
-sudo apt install netcat-openbsd
-```
-
----
-
-## 38. Проверка Ollama
-
-Контейнер:
-
-```bash
-docker ps --filter name=ollama
-```
-
-HTTP:
-
-```bash
-curl -fsS http://localhost:11434/api/tags
-```
-
-Модели:
-
-```bash
-curl -fsS http://localhost:11434/api/tags |
-python3 -m json.tool
-```
-
-Из контейнера, подключённого к `ai-shared`:
-
-```bash
-curl -fsS http://ollama:11434/api/tags
-```
-
----
-
-## 39. Проверка Qdrant
-
-```bash
-curl -fsS http://localhost:6333/
-```
-
-Collections:
-
-```bash
-curl -fsS http://localhost:6333/collections |
-python3 -m json.tool
-```
-
-Docker:
-
-```bash
-docker ps --filter name=qdrant
-```
-
----
-
-## 40. Проверка n8n
-
-```bash
-docker ps --filter name=n8n
-nc -zv localhost 5678
-curl -I http://localhost:5678
-```
-
----
-
-## 41. Проверка RabbitMQ
-
-```bash
-docker ps --filter name=rabbitmq
-nc -zv localhost 5672
-```
-
-Management UI:
-
-```bash
-nc -zv localhost 15672
-```
-
----
-
-## 42. Проверка PostgreSQL
-
-```bash
-docker ps --filter ancestor=postgres
-```
-
-Если опубликован host port:
-
-```bash
-nc -zv localhost 5432
-```
-
-Project-specific проверка:
-
-```bash
-docker compose exec postgres pg_isready
-```
-
----
-
-## 43. Проверка Redis
-
-```bash
-docker ps --filter ancestor=redis
-```
-
-При опубликованном host port:
-
-```bash
-redis-cli -h localhost -p 6379 ping
-```
-
-Ожидается:
-
-```text
-PONG
-```
-
----
-
-## 44. Infrastructure Registry
-
-На сервере SHOULD существовать:
-
-```text
-~/projects/shared-infrastructure/SERVICES.md
-```
-
-Это человекочитаемый источник истины о shared infrastructure.
-
-Пример:
-
-```markdown
-# Shared Services Registry
-
-| Service | Docker service | Internal URL | Host access | Shared Network |
-|---|---|---|---|---|
-| Ollama | ollama | http://ollama:11434 | 127.0.0.1:11434 | ai-shared |
-| n8n | n8n | http://n8n:5678 | 127.0.0.1:5678 | ai-shared |
-| RabbitMQ | rabbitmq | rabbitmq:5672 | 127.0.0.1:5672 | ai-shared |
-```
-
----
-
-## 45. Machine-readable Infrastructure Registry
-
-Также SHOULD существовать:
-
-```text
-~/projects/shared-infrastructure/services.yaml
-```
-
-Пример:
-
-```yaml
-version: 1
-
-networks:
-  shared:
-    name: ai-shared
-
-services:
-  ollama:
-    type: shared
-    docker_service: ollama
-    network: ai-shared
-    internal_host: ollama
-    internal_port: 11434
-    protocol: http
-    health_url: http://ollama:11434/api/tags
-    gpu: true
-
-  n8n:
-    type: shared
-    docker_service: n8n
-    network: ai-shared
-    internal_host: n8n
-    internal_port: 5678
-    protocol: http
-
-  rabbitmq:
-    type: shared
-    docker_service: rabbitmq
-    network: ai-shared
-    internal_host: rabbitmq
-    internal_port: 5672
-    protocol: amqp
-```
-
-LLM SHOULD использовать этот файл как основной источник сведений об уже развёрнутой инфраструктуре.
-
----
-
-## 46. Новый проект
-
-Перед созданием `compose.yaml` новый проект MUST:
-
-1. проверить `~/projects/shared-infrastructure/services.yaml`;
-2. проверить реально запущенные контейнеры через `docker ps`;
-3. проверить networks через `docker network ls`;
-4. проверить необходимые shared services;
-5. только после этого решить, какие сервисы переиспользовать, а какие создать внутри проекта.
-
----
-
-## 47. Запрещённое поведение LLM
-
-LLM MUST NOT автоматически:
-
-- добавлять Ollama;
-- добавлять RabbitMQ;
-- добавлять n8n;
-- добавлять Redis;
-- добавлять PostgreSQL;
-- добавлять Qdrant;
-- назначать host ports;
-- создавать shared Docker networks;
-
-пока не проверена существующая инфраструктура.
-
----
-
-## 48. Правило для LLM при отсутствии доступа к серверу
-
-Если LLM не может самостоятельно выполнить команды, он MUST запросить вывод диагностических команд.
+## 33. Runtime verification
 
 Минимальный набор:
 
 ```bash
 docker ps \
-  --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}'
+  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
 
 docker network ls
 
@@ -1154,44 +858,155 @@ sudo ss -lntp
 nvidia-smi
 ```
 
-После этого LLM MUST дождаться вывода.
+Shared stack:
 
-LLM MUST NOT предполагать наличие сервиса без подтверждения.
+```bash
+cd ~/projects/shared-infrastructure
+docker compose ps
+```
+
+Если LLM не имеет shell access, он MUST запросить необходимый output.
 
 ---
 
-## 49. Малые проверочные шаги
+## 34. Базовая Docker диагностика
 
-При удалённой настройке сервера команды SHOULD даваться небольшими блоками:
+```bash
+docker --version
+docker compose version
+docker info
+```
+
+Networks:
+
+```bash
+docker network ls
+docker network inspect ai-shared
+```
+
+Ports:
+
+```bash
+sudo ss -lntp
+```
+
+All containers:
+
+```bash
+docker ps -a
+```
+
+---
+
+## 35. Проверка shared services
+
+### Ollama
+
+```bash
+curl -fsS http://127.0.0.1:11434/api/tags
+```
+
+Из container в `ai-shared`:
+
+```bash
+curl -fsS http://ollama:11434/api/tags
+```
+
+### n8n
+
+```bash
+curl -fsS http://127.0.0.1:5678/healthz
+```
+
+### RabbitMQ
+
+```bash
+docker compose exec rabbitmq rabbitmq-diagnostics -q ping
+```
+
+### PostgreSQL проекта
+
+```bash
+docker compose exec postgres pg_isready
+```
+
+### Qdrant проекта
+
+Если опубликован только для диагностики:
+
+```bash
+curl -fsS http://127.0.0.1:6333/
+```
+
+---
+
+## 36. Новый проект
+
+Перед созданием project `compose.yaml` MUST:
+
+1. прочитать `docs/services.yaml` или переданный `services.yaml`;
+2. проверить runtime containers;
+3. проверить Docker networks;
+4. проверить необходимые shared services;
+5. определить project-specific services;
+6. определить private network;
+7. определить, какие host ports реально нужны;
+8. определить volumes;
+9. определить healthchecks;
+10. определить migration/indexing jobs;
+11. определить secrets и configuration;
+12. проверить GPU requirements, если применимо.
+
+---
+
+## 37. Запрещённое поведение LLM
+
+LLM MUST NOT автоматически:
+
+- добавлять второй Ollama;
+- добавлять второй shared RabbitMQ;
+- добавлять второй shared n8n;
+- делать PostgreSQL shared без решения;
+- делать Qdrant shared без решения;
+- назначать host ports без необходимости;
+- подключать project database к shared network без причины;
+- использовать host port для container-to-container traffic;
+- считать `services.yaml` доказательством runtime state;
+- хранить secrets в generated Git files.
+
+---
+
+## 38. Малые проверочные шаги
+
+При удалённой настройке сервера, если дальнейшие действия зависят от output,
+команды SHOULD даваться небольшими блоками:
 
 ```text
 2–4 команды
-→ получить вывод
+→ получить output
 → проверить
 → следующий шаг
 ```
 
-Не рекомендуется выдавать длинную последовательность команд, если результат первых команд влияет на дальнейшие действия.
-
 ---
 
-## 50. Проверка перед `docker compose up`
+## 39. Проверка перед запуском
+
+Перед `up`:
 
 ```bash
 docker compose config --quiet &&
 echo "COMPOSE OK"
 ```
 
----
-
-## 51. Проверка после запуска
+После запуска:
 
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
-Для проблемного сервиса:
+Проблемный service:
 
 ```bash
 docker compose logs --tail=100 <service>
@@ -1199,7 +1014,7 @@ docker compose logs --tail=100 <service>
 
 ---
 
-## 52. Restart policy
+## 40. Restart policy
 
 Server services SHOULD использовать:
 
@@ -1207,52 +1022,52 @@ Server services SHOULD использовать:
 restart: unless-stopped
 ```
 
-если должны автоматически запускаться после reboot.
+если должны восстановиться после reboot.
 
-One-shot jobs, migrations, indexing и data import не должны использовать такой restart policy.
-
----
-
-## 53. Indexing / migrations
-
-Миграции, indexing и data import SHOULD быть отделены от обычного старта приложения.
-
-`docker compose up` не должен неожиданно запускать полную длительную переиндексацию.
+One-shot jobs, migrations, indexing и imports не должны бесконечно
+перезапускаться.
 
 ---
 
-## 54. Observability
+## 41. Migrations / indexing / imports
 
-Новый backend SHOULD писать logs в stdout/stderr.
+Long-running или one-shot operations SHOULD быть отделены от обычного
+application startup.
 
-Контейнер должен диагностироваться через:
+`docker compose up` не должен неожиданно запускать полную переиндексацию,
+обучение модели или тяжёлый data import.
+
+---
+
+## 42. Observability
+
+Backend SHOULD писать application logs в stdout/stderr.
+
+Container должен диагностироваться через:
 
 ```bash
 docker compose logs
 ```
 
+Structured application logs SHOULD соответствовать
+`ENGINEERING_GUIDELINES.md`.
+
 ---
 
-## 55. Service naming
+## 43. Naming
 
-Имена должны отражать проект.
+Service names и resources SHOULD отражать ownership проекта.
 
 Примеры:
 
 ```text
 pdrd-api
 pdrd-celery
-pdrd-qdrant
-
 contract-ai-api
 contract-ai-celery
 ```
 
----
-
-## 56. Environment naming
-
-Использовать:
+Environment naming:
 
 ```text
 dev
@@ -1260,24 +1075,17 @@ stage
 prod
 ```
 
-При необходимости:
-
-```text
-pdrd-dev
-pdrd-stage
-pdrd-prod
-```
-
 ---
 
-## 57. Infrastructure dependency checklist
+## 44. Infrastructure checklist
 
-Перед добавлением нового проекта необходимо ответить:
+Перед добавлением проекта ответить:
 
 ```text
 [ ] Требуется GPU?
+[ ] Какая модель?
+[ ] Какой ожидаемый VRAM/context/parallelism?
 [ ] Требуется Ollama?
-[ ] Какая модель Ollama?
 [ ] Требуется RabbitMQ?
 [ ] Требуется Celery?
 [ ] Требуется n8n?
@@ -1287,238 +1095,102 @@ pdrd-prod
 [ ] Qdrant shared или project-specific?
 [ ] Требуется Redis?
 [ ] Какие host ports действительно необходимы?
-[ ] Какая shared Docker network используется?
+[ ] Какая shared network используется?
+[ ] Какие private networks нужны?
 [ ] Какие persistent volumes создаются?
 [ ] Какие healthchecks реализованы?
 [ ] Как выполняются migrations?
-[ ] Как выполняется indexing?
+[ ] Как выполняется indexing/import?
 [ ] Как выполняется backup?
+[ ] Какие secrets требуются?
+[ ] .env.example содержит полный catalog?
+[ ] .env остаётся sparse?
 ```
 
 ---
 
-## 58. Definition of Done для инфраструктуры
-
-Инфраструктура нового проекта считается готовой только если:
+## 45. Definition of Done для инфраструктуры
 
 ```text
 [ ] docker compose config проходит
-[ ] контейнеры запускаются
+[ ] containers запускаются
 [ ] healthchecks проходят
 [ ] нет конфликтов host ports
-[ ] нет конфликтов container names
+[ ] нет конфликтов Compose project names
 [ ] нет конфликтов volumes
 [ ] shared services не дублируются
-[ ] backend видит необходимые shared services
-[ ] GPU доступна из нужного контейнера
+[ ] project data изолированы
+[ ] backend видит нужные shared services по Docker DNS
+[ ] GPU доступна нужному container, если требуется
 [ ] secrets отсутствуют в Git
 [ ] .env.example актуален
-[ ] README содержит инструкции запуска
-[ ] после reboot сервисы восстанавливаются корректно
+[ ] .env не требуется заполнять non-secret defaults без необходимости
+[ ] README содержит запуск и диагностику
+[ ] migrations/indexing имеют явный lifecycle
+[ ] после reboot long-running services восстанавливаются корректно
 ```
 
 ---
 
-## 59. Обязательная инструкция для LLM / AI Agent
+## 46. Shared infrastructure ownership
 
-> Не проектируй инфраструктуру проекта изолированно.
-> Сначала установи существующую инфраструктуру хоста.
->
-> Shared services должны переиспользоваться.
->
-> Перед добавлением Ollama, RabbitMQ, n8n, Qdrant, PostgreSQL,
-> Redis или другого инфраструктурного компонента проверь,
-> существует ли он уже и должен ли новый проект использовать
-> существующий экземпляр.
->
-> Не назначай host ports без необходимости.
->
-> Для общения между контейнерами используй Docker DNS и internal networks.
->
-> Все инфраструктурные адреса должны задаваться через environment variables.
->
-> Каждый проект должен быть независим по коду, данным и lifecycle,
-> но может использовать shared infrastructure.
->
-> При отсутствии сведений о сервере сначала запроси или выполни
-> диагностические команды, а не делай предположения.
-
----
-
-## 60. Практическое правило запуска shared stack
-
-Shared services MUST запускаться из отдельного Compose project.
-
-Рекомендуемая директория:
+Shared infrastructure SHOULD храниться в отдельном repository и Compose project.
 
 ```text
-~/projects/shared-infrastructure/
+shared-infrastructure
+├── Ollama
+├── n8n
+└── RabbitMQ
+
+Project A
+Project B
+Project C
 ```
 
-Рекомендуемое имя Compose project:
+Business project MUST NOT быть владельцем shared service, от которого
+независимо зависит другой business project.
 
-```dotenv
-COMPOSE_PROJECT_NAME=shared
-```
-
-Типичный запуск:
-
-```bash
-cd ~/projects/shared-infrastructure
-docker compose up -d
-docker compose ps
-```
-
-Проверка shared stack из любой директории:
-
-```bash
-docker compose \
-  --project-directory ~/projects/shared-infrastructure \
-  -f ~/projects/shared-infrastructure/compose.yaml \
-  ps
-```
-
-Либо глобальная проверка всех Docker-контейнеров:
-
-```bash
-docker ps
-```
-
-`docker compose ps` без `-f` / `--project-directory` показывает Compose project,
-определённый текущей директорией и её Compose-файлом. Поэтому для shared services
-следует либо перейти в `~/projects/shared-infrastructure`, либо явно указать
-путь к Compose-файлу.
-
----
-
-## 61. Shared infrastructure как отдельный Git repository
-
-Shared infrastructure SHOULD храниться в отдельном Git repository.
-
-Например:
+Плохо:
 
 ```text
-company/shared-infrastructure
+Project A compose
+└── Ollama
+
+Project B
+└── depends on Project A Ollama
 ```
-
-На сервере:
-
-```bash
-cd ~/projects
-git clone <repository-url> shared-infrastructure
-```
-
-Это позволяет:
-
-- версионировать shared Compose;
-- проводить code review изменений инфраструктуры;
-- хранить `services.yaml`;
-- хранить `.env.example`;
-- документировать migrations shared-сервисов;
-- независимо обновлять бизнес-проекты и инфраструктуру.
-
-Бизнес-проекты MUST NOT быть владельцами shared Ollama / n8n / RabbitMQ.
-
----
-
-## 62. Ownership shared services
-
-Неправильно:
-
-```text
-PDRD-validation/compose.yaml
-└── ollama
-
-Contract-AI/compose.yaml
-└── использует Ollama PDRD
-```
-
-Потому что удаление или остановка PDRD неожиданно останавливает инфраструктуру Contract-AI.
 
 Правильно:
 
 ```text
-shared-infrastructure/compose.yaml
-├── ollama
-├── n8n
-└── rabbitmq
+shared-infrastructure compose
+└── Ollama
 
-PDRD-validation/compose.yaml
-└── pdrd services
-
-Contract-AI/compose.yaml
-└── contract-ai services
-```
-
-Shared stack имеет независимый lifecycle.
-
----
-
-## 63. Практическая схема команд
-
-### Общая инфраструктура
-
-```bash
-cd ~/projects/shared-infrastructure
-docker compose up -d
-docker compose ps
-```
-
-### PDRD
-
-```bash
-cd ~/projects/PDRD-validation
-docker compose up -d
-docker compose ps
-```
-
-### Contract AI
-
-```bash
-cd ~/projects/contract-analysis-ai
-docker compose up -d
-docker compose ps
-```
-
-### Все контейнеры сервера
-
-Из любой директории:
-
-```bash
-docker ps
-```
-
-### Только shared Compose project из любой директории
-
-```bash
-docker compose \
-  -f ~/projects/shared-infrastructure/compose.yaml \
-  --project-directory ~/projects/shared-infrastructure \
-  ps
+Project A ─┐
+Project B ─┼──> shared Ollama
+Project C ─┘
 ```
 
 ---
 
-## 64. Главный архитектурный принцип
+## 47. Главная схема
 
 ```text
-                   PHYSICAL SERVER
-                         │
-              ┌──────────┴───────────┐
-              │                      │
-       SHARED INFRA             PROJECTS
-              │                      │
-        ┌─────┼─────┐        ┌───────┼────────┐
-        │     │     │        │       │        │
-     Ollama  n8n RabbitMQ   PDRD  Contract  Other
-        │           │        │
-        │           │        ├── API
-        │           │        ├── frontend
-        │           │        ├── postgres
-        │           │        ├── qdrant
-        │           │        └── celery
-        │           │
-        └───────────┴──── ai-shared
+                    PHYSICAL SERVER
+                          │
+              ┌───────────┴───────────┐
+              │                       │
+        SHARED INFRA              PROJECTS
+              │                       │
+       ┌──────┼──────┐         ┌──────┼────────┐
+       │      │      │         │      │        │
+    Ollama   n8n  RabbitMQ    API   frontend  workers
+       │             │         │
+       └─────────────┴──── ai-shared
+                              │
+                    project private network
+                              │
+                    PostgreSQL / Qdrant / Redis
 ```
 
 Главное правило:
@@ -1528,6 +1200,6 @@ Share infrastructure.
 Isolate application state.
 Do not expose ports unnecessarily.
 Do not duplicate expensive services.
-Discover infrastructure before creating infrastructure.
-Keep shared infrastructure lifecycle independent from business projects.
+Discover runtime before changing infrastructure.
+Keep shared lifecycle independent from business projects.
 ```

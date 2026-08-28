@@ -1,10 +1,15 @@
 # shared-infrastructure
 
-Общий инфраструктурный Docker Compose stack для нескольких приложений на одном сервере.
+Общий Docker Compose stack и набор инженерных инструкций для нескольких
+приложений на одном сервере.
 
-Репозиторий отделяет lifecycle общей инфраструктуры от lifecycle бизнес-проектов.
-Остановка, rebuild или удаление одного приложения не должны останавливать Ollama,
-n8n или RabbitMQ, которыми пользуются другие приложения.
+Repository решает две отдельные задачи:
+
+1. управляет lifecycle общей infrastructure;
+2. хранит переносимый `docs/` instruction bundle для разработчиков и
+   LLM / AI coding agents.
+
+---
 
 ## Что разворачивается
 
@@ -16,14 +21,14 @@ shared-infrastructure
 └── RabbitMQ
 ```
 
-Общая сеть:
+Shared network:
 
 ```text
 ai-shared
 ```
 
-Проектные PostgreSQL, Qdrant, Redis, Celery, backend и frontend сюда по умолчанию
-не входят.
+Application PostgreSQL, Qdrant, Redis, Celery, backend и frontend сюда
+по умолчанию не входят.
 
 ---
 
@@ -39,8 +44,9 @@ shared-infrastructure/
 ├── SERVICES.md
 ├── PROJECT_INTEGRATION.md
 ├── docs/
-│   ├── INFRASTRUCTURE_INSTRUCTIONS.md
 │   ├── LLM_CONTEXT.md
+│   ├── ENGINEERING_GUIDELINES.md
+│   ├── INFRASTRUCTURE_INSTRUCTIONS.md
 │   └── services.yaml
 └── scripts/
     ├── bootstrap.sh
@@ -50,9 +56,39 @@ shared-infrastructure/
 
 ---
 
+## Portable `docs/` bundle
+
+Папка:
+
+```text
+docs/
+```
+
+специально предназначена для передачи LLM при начале нового проекта.
+
+Программист может показать LLM только эти четыре файла:
+
+```text
+LLM_CONTEXT.md
+ENGINEERING_GUIDELINES.md
+INFRASTRUCTURE_INSTRUCTIONS.md
+services.yaml
+```
+
+Главная точка входа:
+
+```text
+docs/LLM_CONTEXT.md
+```
+
+LLM не обязана читать `README.md`, `PROJECT_INTEGRATION.md` или scripts этого
+repository для проектирования нового application project.
+
+---
+
 ## 1. Требования
 
-На host должны быть установлены:
+На host:
 
 ```bash
 docker --version
@@ -80,81 +116,116 @@ docker run --rm \
 
 ## 2. Клонирование
 
-Для приватного GitHub-репозитория рекомендуется SSH:
-
 ```bash
 mkdir -p ~/projects
 cd ~/projects
-git clone git@github.com:neo-term-it/shared-infrastructure.git
+git clone <repository-url> shared-infrastructure
 cd shared-infrastructure
-```
-
-HTTPS также допустим, если настроена авторизация GitHub:
-
-```bash
-git clone https://github.com/neo-term-it/shared-infrastructure.git
 ```
 
 ---
 
-## 3. `.env`
+## 3. Configuration model
 
-`.env` содержит локальные secrets и MUST NOT попадать в Git.
+### `.env.example`
 
-На новом сервере:
+`.env.example` — committed полный каталог configuration variables.
 
-```bash
-cp .env.example .env
+Он содержит:
+
+- non-secret baseline values;
+- pinned image versions;
+- safe defaults;
+- placeholders для обязательных secrets.
+
+Он не содержит настоящих production secrets.
+
+### `.env`
+
+`.env` — private sparse override.
+
+Для текущего shared stack обычно достаточно:
+
+```dotenv
+N8N_DB_PASSWORD=<strong-password>
+N8N_ENCRYPTION_KEY=<generated-key>
+RABBITMQ_DEFAULT_PASS=<strong-password>
 ```
 
-Сгенерировать ключ n8n:
+Non-secret values **не нужно копировать** из `.env.example`.
+
+Это позволяет добавлять новые non-secret settings без ручного обновления
+каждого существующего `.env`.
+
+### Генерация значений
+
+n8n encryption key:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Сгенерировать пароль:
+password:
 
 ```bash
 openssl rand -base64 32
 ```
 
-Заменить в `.env`:
+---
 
-```dotenv
-N8N_DB_PASSWORD=...
-N8N_ENCRYPTION_KEY=...
-RABBITMQ_DEFAULT_PASS=...
+## 4. Docker Compose и `.env.example`
+
+Docker Compose не использует `.env.example` как автоматический runtime source.
+
+Поэтому `compose.yaml` содержит безопасные defaults:
+
+```text
+${VAR:-default}
 ```
 
-### Binding host ports
+и required secrets:
 
-Безопасное значение по умолчанию:
-
-```dotenv
-SHARED_BIND_IP=127.0.0.1
+```text
+${SECRET:?message}
 ```
 
-При нём host ports доступны только с сервера.
+`.env.example` остаётся полным configuration catalog.
 
-Если прямой доступ нужен из локальной сети, можно задать конкретный LAN IP:
+`.env` остаётся sparse private override.
+
+---
+
+## 5. Host binding
+
+Безопасный default:
+
+```text
+127.0.0.1
+```
+
+Для текущего stack используются отдельные variables:
+
+```text
+SHARED_BIND_IP
+N8N_BIND_IP
+RABBITMQ_BIND_IP
+```
+
+Если конкретный service должен быть доступен из LAN, переопределить только
+нужный variable в `.env`.
+
+Например:
 
 ```dotenv
 SHARED_BIND_IP=192.168.10.150
 ```
 
-или, при осознанной необходимости:
-
-```dotenv
-SHARED_BIND_IP=0.0.0.0
-```
-
-Последний вариант публикует сервис на всех интерфейсах host и требует
-дополнительной сетевой защиты.
+`0.0.0.0` публикует service на всех host interfaces и должен использоваться
+только осознанно.
 
 ---
 
-## 4. Первый запуск
+## 6. Первый запуск
 
 Сделать scripts исполняемыми:
 
@@ -170,10 +241,11 @@ Bootstrap:
 
 Он:
 
-1. проверит Docker;
-2. проверит наличие `.env`;
-3. создаст external network `ai-shared`, если её ещё нет;
-4. провалидирует Compose.
+1. проверяет Docker;
+2. загружает sparse `.env`, если он существует;
+3. проверяет обязательные secrets;
+4. создаёт external network `ai-shared`, если нужно;
+5. валидирует Compose.
 
 После этого:
 
@@ -181,77 +253,14 @@ Bootstrap:
 docker compose pull
 docker compose up -d
 docker compose ps
-```
-
----
-
-## 5. Проверка
-
-Автоматическая:
-
-```bash
 ./scripts/check.sh
 ```
 
-Ручная:
-
-```bash
-docker compose ps
-```
-
-```bash
-curl -fsS http://127.0.0.1:11434/api/tags |
-python3 -m json.tool
-```
-
-```bash
-curl -fsS http://127.0.0.1:5678/healthz
-```
-
-```bash
-docker compose exec rabbitmq rabbitmq-diagnostics -q ping
-```
-
-```bash
-nvidia-smi
-```
-
 ---
 
-## 6. Ollama models
+## 7. Shared network
 
-Образы Ollama и модели Ollama — разные сущности.
-
-`docker compose pull` скачивает Docker image Ollama, но не LLM/VLM models.
-
-Посмотреть модели:
-
-```bash
-docker compose exec ollama ollama list
-```
-
-Скачать модель:
-
-```bash
-docker compose exec ollama ollama pull qwen3-vl:8b
-```
-
-Например embedding model:
-
-```bash
-docker compose exec ollama ollama pull qwen3-embedding:4b
-```
-
-Модели сохраняются в persistent volume shared Ollama и скачиваются один раз
-для всех приложений.
-
-Каждый бизнес-проект должен документировать, какие Ollama models ему нужны.
-
----
-
-## 7. Как приложение использует shared Ollama
-
-В Compose приложения:
+Application container, которому нужен shared service:
 
 ```yaml
 services:
@@ -259,8 +268,6 @@ services:
     networks:
       - default
       - ai-shared
-    environment:
-      OLLAMA_BASE_URL: http://ollama:11434
 
 networks:
   ai-shared:
@@ -268,31 +275,41 @@ networks:
     name: ai-shared
 ```
 
-Внутри application container:
+Project PostgreSQL обычно остаётся только в private project network.
+
+---
+
+## 8. Ollama
+
+Container-to-container URL:
 
 ```text
 http://ollama:11434
 ```
 
-Не использовать:
+Application configuration:
 
-```text
-http://localhost:11434
+```dotenv
+OLLAMA_BASE_URL=http://ollama:11434
 ```
 
-потому что `localhost` внутри контейнера означает сам этот контейнер.
+Проверка host:
 
-Полный пример:
+```bash
+curl -fsS http://127.0.0.1:${OLLAMA_HOST_PORT:-11434}/api/tags
+```
 
-```text
-docs/PROJECT_INTEGRATION.md
+Проверка models:
+
+```bash
+docker compose exec ollama ollama list
 ```
 
 ---
 
-## 8. Как приложение использует n8n
+## 9. n8n
 
-Приложение, подключённое к `ai-shared`, видит n8n по адресу:
+Internal URL:
 
 ```text
 http://n8n:5678
@@ -305,40 +322,68 @@ Workflow names SHOULD иметь project namespace:
 [CONTRACT] Analyze Contract
 ```
 
-Это упрощает поддержку одного общего n8n несколькими проектами.
+n8n database является private infrastructure dependency n8n и не должна
+использоваться application projects.
 
 ---
 
-## 9. Как приложение использует RabbitMQ
+## 10. RabbitMQ
 
-Внутренний endpoint:
+Internal endpoint:
 
 ```text
 rabbitmq:5672
 ```
 
-Но application projects SHOULD NOT использовать bootstrap admin пользователя.
-
-Для каждого проекта рекомендуется:
+Application projects SHOULD использовать:
 
 ```text
-отдельный vhost
-отдельный user
-отдельный password
+one vhost per project
+one user per project
 ```
 
-Например:
-
-```text
-/pdrd
-/contract-ai
-```
-
-После создания credentials приложение хранит их только в своём `.env`.
+Bootstrap admin credentials не предназначены для application runtime.
 
 ---
 
-## 10. Из какой директории выполнять `docker compose ps`
+## 11. Проверка shared stack
+
+Из repository:
+
+```bash
+docker compose ps
+./scripts/check.sh
+```
+
+Все containers host:
+
+```bash
+docker ps \
+  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+```
+
+Networks:
+
+```bash
+docker network ls
+docker network inspect ai-shared
+```
+
+Ports:
+
+```bash
+sudo ss -lntp
+```
+
+GPU:
+
+```bash
+nvidia-smi
+```
+
+---
+
+## 12. Из какой директории выполнять Compose commands
 
 Shared stack:
 
@@ -347,29 +392,17 @@ cd ~/projects/shared-infrastructure
 docker compose ps
 ```
 
-PDRD:
+Другой project:
 
 ```bash
-cd ~/projects/PDRD-validation
+cd ~/projects/<project-name>
 docker compose ps
 ```
 
-Другой проект:
+`docker compose ps` относится к Compose project текущей директории, если
+Compose files/project directory явно не указаны.
 
-```bash
-cd ~/projects/contract-analysis-ai
-docker compose ps
-```
-
-`docker compose ps` без явного `-f` относится к Compose project текущей директории.
-
-Все Docker-контейнеры сервера можно увидеть из любой директории:
-
-```bash
-docker ps
-```
-
-Посмотреть shared stack из любой директории:
+Shared stack из любой директории:
 
 ```bash
 docker compose \
@@ -380,12 +413,11 @@ docker compose \
 
 ---
 
-## 11. Остановка и запуск
+## 13. Остановка и запуск
 
-Остановить shared containers:
+Остановить containers:
 
 ```bash
-cd ~/projects/shared-infrastructure
 docker compose stop
 ```
 
@@ -401,7 +433,7 @@ docker compose start
 docker compose down
 ```
 
-External network `ai-shared` не удаляется этим Compose.
+External `ai-shared` этим Compose не удаляется.
 
 ### Критическое предупреждение
 
@@ -411,7 +443,7 @@ External network `ai-shared` не удаляется этим Compose.
 docker compose down -v
 ```
 
-`-v` удаляет persistent volumes и может уничтожить:
+`-v` может удалить persistent data:
 
 - Ollama models;
 - n8n data;
@@ -420,11 +452,11 @@ docker compose down -v
 
 ---
 
-## 12. Обновление
+## 14. Обновление
 
-Версии images зафиксированы в `.env.example`.
+Images pinned.
 
-Обновление выполняется осознанно.
+Обновление выполнять осознанно:
 
 ```bash
 git pull
@@ -435,19 +467,19 @@ docker compose ps
 ./scripts/check.sh
 ```
 
-Не менять image tags на `latest` для production-like окружений.
+Не менять production-like image tags на `latest` без причины.
 
 ---
 
-## 13. Перезагрузка сервера
+## 15. Reboot
 
-Services используют:
+Long-running services используют:
 
 ```yaml
 restart: unless-stopped
 ```
 
-Docker должен быть включён в автозапуск:
+Docker:
 
 ```bash
 systemctl is-enabled docker
@@ -463,82 +495,83 @@ docker compose ps
 
 ---
 
-## 14. Диагностика
+## 16. Диагностика
 
-Все shared services:
-
-```bash
-docker compose ps
-```
-
-Logs Ollama:
+Ollama:
 
 ```bash
 docker compose logs --tail=100 ollama
 ```
 
-Logs n8n:
+n8n:
 
 ```bash
 docker compose logs --tail=100 n8n
 ```
 
-Logs RabbitMQ:
+RabbitMQ:
 
 ```bash
 docker compose logs --tail=100 rabbitmq
 ```
 
-Занятые порты:
-
-```bash
-sudo ss -lntp
-```
-
-Docker networks:
-
-```bash
-docker network ls
-docker network inspect ai-shared
-```
-
 ---
 
-## 15. Источники истины
+## 17. Sources of truth
 
-Для разработчика:
+### Для runtime/operator работы shared repository
 
 ```text
+compose.yaml
 README.md
 SERVICES.md
 docs/INFRASTRUCTURE_INSTRUCTIONS.md
-docs/PROJECT_INTEGRATION.md
+docs/services.yaml
+scripts/
 ```
 
-Для LLM / automation:
+### Для проектирования нового application с LLM
 
 ```text
-services.yaml
 docs/LLM_CONTEXT.md
+docs/ENGINEERING_GUIDELINES.md
 docs/INFRASTRUCTURE_INSTRUCTIONS.md
+docs/services.yaml
 ```
 
-`docs/services.yaml` описывает intended topology.
+`PROJECT_INTEGRATION.md` является только коротким pointer на этот bundle и
+не должен дублировать его правила.
 
-Он НЕ заменяет runtime verification.
-
-Перед изменением инфраструктуры всё равно проверять:
-
-```bash
-docker ps
-docker network ls
-sudo ss -lntp
-nvidia-smi
-```
+`docs/services.yaml` описывает intended topology и НЕ заменяет runtime
+verification.
 
 ---
 
-## 16. Архитектурный принцип
+## 18. Repository-wide consistency rule
+
+Если меняется обязательное engineering/infrastructure правило, необходимо
+проверить связанные источники, которые описывают тот же workflow.
+
+Минимально проверить:
+
+```text
+docs/LLM_CONTEXT.md
+docs/ENGINEERING_GUIDELINES.md
+docs/INFRASTRUCTURE_INSTRUCTIONS.md
+docs/services.yaml
+README.md
+compose.yaml
+.env.example
+scripts/
+```
+
+Изменять файл нужно только если новое правило действительно влияет на него.
+
+Цель — отсутствие нескольких противоречащих друг другу copies одного правила.
+
+---
+
+## 19. Архитектурный принцип
 
 ```text
                     HOST
@@ -547,19 +580,21 @@ nvidia-smi
           │                     │
   shared-infrastructure      applications
           │                     │
-     ┌────┼─────┐        ┌──────┼───────┐
-   Ollama n8n RabbitMQ   PDRD Contract Other
+     ┌────┼─────┐        ┌──────┼────────┐
+   Ollama n8n RabbitMQ   API frontend workers
      │     │      │        │
      └─────┴──────┴── ai-shared
+                           │
+                    private project net
+                           │
+                 PostgreSQL/Qdrant/Redis
 ```
-
-Основные правила:
 
 ```text
 Share infrastructure.
 Isolate application state.
+Use Docker DNS.
+Keep .env sparse.
 Do not expose ports unnecessarily.
-Do not duplicate expensive services.
-Discover infrastructure before creating infrastructure.
-Keep shared infrastructure lifecycle independent from business projects.
+Verify runtime instead of assuming it.
 ```
