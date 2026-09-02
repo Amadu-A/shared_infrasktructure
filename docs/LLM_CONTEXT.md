@@ -15,6 +15,7 @@ LLM MUST считать связанным набором:
 docs/
 ├── LLM_CONTEXT.md
 ├── ENGINEERING_GUIDELINES.md
+├── FRONTEND_GUIDELINES.md
 ├── INFRASTRUCTURE_INSTRUCTIONS.md
 └── services.yaml
 ```
@@ -30,9 +31,12 @@ docs/
 архитектуры LLM MUST:
 
 1. Прочитать `ENGINEERING_GUIDELINES.md`.
-2. Прочитать `INFRASTRUCTURE_INSTRUCTIONS.md`.
-3. Прочитать `services.yaml`.
-4. Изучить существующий проект, если он уже создан:
+2. Если проект содержит frontend или задача затрагивает HTML/CSS/JavaScript/
+   TypeScript/templates/browser UI — полностью прочитать
+   `FRONTEND_GUIDELINES.md`.
+3. Прочитать `INFRASTRUCTURE_INSTRUCTIONS.md`.
+4. Прочитать `services.yaml`.
+5. Изучить существующий проект, если он уже создан:
    - `README.md`;
    - `pyproject.toml`;
    - `compose.yaml` / `docker-compose.yml`;
@@ -42,13 +46,14 @@ docs/
    - migrations;
    - CI configuration;
    - project-specific architecture docs.
-5. Определить границы приложения и ответственности компонентов.
-6. Определить shared и project-specific dependencies.
-7. Определить application use-cases, ports/interfaces и composition root.
-8. Определить persistence и transaction boundaries.
-9. Определить configuration model и environment variables.
-10. Если есть frontend — определить template/CSS/JS structure.
-11. Только после этого предлагать структуру файлов и реализацию.
+6. Определить границы приложения и ответственности компонентов.
+7. Определить shared и project-specific dependencies.
+8. Определить application use-cases, ports/interfaces и composition root.
+9. Определить persistence и transaction boundaries.
+10. Определить configuration model и environment variables.
+11. Если есть frontend — определить template/CSS/JS structure в соответствии с
+    `FRONTEND_GUIDELINES.md`.
+12. Только после этого предлагать структуру файлов и реализацию.
 
 LLM MUST NOT начинать с генерации большого количества файлов, пока не определены
 границы системы и зависимости.
@@ -65,6 +70,8 @@ LLM MUST NOT начинать с генерации большого колич�
 project-specific требования и ограничения
         ↓
 ENGINEERING_GUIDELINES.md
+        ↓
+FRONTEND_GUIDELINES.md — если затрагивается frontend
         ↓
 INFRASTRUCTURE_INSTRUCTIONS.md
         ↓
@@ -120,7 +127,26 @@ Project-specific решение MAY отклоняться от общего gui
 
 ---
 
-## 4. Architecture planning
+## 4. Frontend preflight
+
+Если проект или задача затрагивает frontend, LLM MUST до генерации или
+изменения frontend-кода:
+
+1. полностью прочитать `FRONTEND_GUIDELINES.md`;
+2. изучить существующий base template;
+3. изучить основной CSS entrypoint и структуру CSS modules/blocks;
+4. определить принятую BEM-схему;
+5. изучить common и feature JavaScript;
+6. изучить frontend tests/toolchain, если они есть;
+7. перед завершением выполнить frontend review checklist из
+   `FRONTEND_GUIDELINES.md`.
+
+LLM MUST NOT считать краткое упоминание frontend в
+`ENGINEERING_GUIDELINES.md` заменой чтению `FRONTEND_GUIDELINES.md`.
+
+---
+
+## 5. Architecture planning
 
 До реализации LLM SHOULD определить как минимум:
 
@@ -143,7 +169,7 @@ Tests
 
 ---
 
-## 5. Infrastructure discovery
+## 6. Infrastructure discovery
 
 При создании или изменении `compose.yaml` приложения LLM MUST:
 
@@ -158,7 +184,7 @@ Tests
 
 ---
 
-## 6. Runtime verification
+## 7. Runtime verification
 
 Если есть shell-доступ, выполнить:
 
@@ -187,7 +213,7 @@ LLM MUST NOT утверждать, что сервис запущен, толь�
 
 ---
 
-## 7. Shared DNS endpoints
+## 8. Shared DNS endpoints
 
 После подтверждения работы shared stack и подключения application container
 к `ai-shared` использовать Docker DNS:
@@ -204,7 +230,7 @@ RabbitMQ: rabbitmq:5672
 
 ---
 
-## 8. Project-specific by default
+## 9. Project-specific by default
 
 Не выносить автоматически в shared:
 
@@ -224,7 +250,7 @@ project background jobs
 
 ---
 
-## 9. Configuration rules
+## 10. Configuration rules
 
 Для Python/Pydantic проектов базовый pattern:
 
@@ -267,7 +293,7 @@ environment:
 
 ---
 
-## 10. Output requirements
+## 11. Output requirements
 
 При предложении архитектурных изменений LLM SHOULD явно указать:
 
@@ -285,6 +311,8 @@ environment:
 - какие environment variables нужны;
 - какие secrets обязательны;
 - какие tests нужны;
+- если затронут frontend — как соблюдены BEM, CSS/JS structure, semantic HTML,
+  accessibility и frontend checklist;
 - как проверить configuration;
 - как проверить runtime после запуска.
 
