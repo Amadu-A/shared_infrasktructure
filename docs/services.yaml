@@ -1,36 +1,32 @@
 # docs/services.yaml
 
 schema_version: 1
-
 bundle:
   entrypoint: docs/LLM_CONTEXT.md
   engineering_guidelines: docs/ENGINEERING_GUIDELINES.md
   infrastructure_guidelines: docs/INFRASTRUCTURE_INSTRUCTIONS.md
   registry: docs/services.yaml
-
+  frontend_guidelines: docs/FRONTEND_GUIDELINES.md
 stack:
   name: shared-infrastructure
   compose_project_name: shared
-  recommended_directory: "~/projects/shared-infrastructure"
+  recommended_directory: ~/projects/shared-infrastructure
   owner: shared-infrastructure
-  purpose: "Shared infrastructure for multiple application projects"
-
+  purpose: Shared infrastructure for multiple application projects
 networks:
   ai_shared:
     name: ai-shared
     lifecycle: external
-    purpose: "Cross-project network for approved shared services"
-
+    purpose: Cross-project network for approved shared services
 host_access_policy:
-  intended_scope: "LAN and VPN only"
-  safe_compose_default_bind_ip: "127.0.0.1"
-  current_deployment_bind_ip: "0.0.0.0"
+  intended_scope: LAN and VPN only
+  safe_compose_default_bind_ip: 127.0.0.1
+  current_deployment_bind_ip: 0.0.0.0
   firewall_source_restriction_required: true
   notes:
-    - "0.0.0.0 is used because the server must accept connections through more than one host interface."
-    - "Firewall rules must allow the published ports only from approved LAN and VPN source networks."
-    - "Do not expose these ports directly to the public Internet."
-
+  - 0.0.0.0 is used because the server must accept connections through more than one host interface.
+  - Firewall rules must allow the published ports only from approved LAN and VPN source networks.
+  - Do not expose these ports directly to the public Internet.
 services:
   ollama:
     managed_here: true
@@ -39,32 +35,25 @@ services:
     docker_dns_name: ollama
     network: ai-shared
     protocol: http
-    internal_url: "http://ollama:11434"
-
+    internal_url: http://ollama:11434
     host_bind_ip_env: SHARED_BIND_IP
-    compose_default_host_bind_ip: "127.0.0.1"
-    current_deployment_host_bind_ip: "0.0.0.0"
-
     host_port_env: OLLAMA_HOST_PORT
     default_host_port: 11434
-
-    host_access:
-      required: true
-      scope: "LAN and VPN"
-      firewall_restricted: true
-
     health:
-      host_url: "http://127.0.0.1:11434/api/tags"
-      command: "curl -fsS http://127.0.0.1:11434/api/tags"
-
+      host_url: http://127.0.0.1:11434/api/tags
+      command: curl -fsS http://127.0.0.1:11434/api/tags
     gpu:
       required: true
       vendor: nvidia
-
     notes:
-      - "Application projects should reuse this Ollama unless an exception is documented."
-      - "Required models are declared by application projects, not by this registry."
-
+    - Application projects should reuse this Ollama unless an exception is documented.
+    - Required models are declared by application projects, not by this registry.
+    compose_default_host_bind_ip: 127.0.0.1
+    current_deployment_host_bind_ip: 0.0.0.0
+    host_access:
+      required: true
+      scope: LAN and VPN
+      firewall_restricted: true
   n8n:
     managed_here: true
     lifecycle: shared
@@ -72,34 +61,27 @@ services:
     docker_dns_name: n8n
     network: ai-shared
     protocol: http
-    internal_url: "http://n8n:5678"
-
+    internal_url: http://n8n:5678
     host_bind_ip_env: N8N_BIND_IP
-    compose_default_host_bind_ip: "127.0.0.1"
-    current_deployment_host_bind_ip: "0.0.0.0"
-
     host_port_env: N8N_HOST_PORT
     default_host_port: 5678
-
-    host_access:
-      required: true
-      scope: "LAN and VPN"
-      purpose: "n8n editor and administration from another computer"
-      firewall_restricted: true
-      https_recommended: true
-
     health:
-      host_url: "http://127.0.0.1:5678/healthz"
-      command: "curl -fsS http://127.0.0.1:5678/healthz"
-
+      host_url: http://127.0.0.1:5678/healthz
+      command: curl -fsS http://127.0.0.1:5678/healthz
     storage:
       database_service: n8n-db
       database_shared_with_apps: false
-
     notes:
-      - "Use project prefixes in workflow names, for example [PDRD] or [CONTRACT]."
-      - "For long-term remote UI access, prefer HTTPS through a reverse proxy even inside trusted networks."
-
+    - Use project prefixes in workflow names, for example [PDRD] or [CONTRACT].
+    - For long-term remote UI access, prefer HTTPS through a reverse proxy even inside trusted networks.
+    compose_default_host_bind_ip: 127.0.0.1
+    current_deployment_host_bind_ip: 0.0.0.0
+    host_access:
+      required: true
+      scope: LAN and VPN
+      purpose: n8n editor and administration from another computer
+      firewall_restricted: true
+      https_recommended: true
   rabbitmq:
     managed_here: true
     lifecycle: shared
@@ -107,88 +89,71 @@ services:
     docker_dns_name: rabbitmq
     network: ai-shared
     protocol: amqp
-    internal_endpoint: "rabbitmq:5672"
-
+    internal_endpoint: rabbitmq:5672
     host_bind_ip_env: RABBITMQ_BIND_IP
-    compose_default_host_bind_ip: "127.0.0.1"
-    current_deployment_host_bind_ip: "0.0.0.0"
-
     host_port_env: RABBITMQ_AMQP_HOST_PORT
     default_host_port: 5672
-
     management_port_env: RABBITMQ_MANAGEMENT_HOST_PORT
     default_management_port: 15672
-
+    health:
+      command: docker compose exec -T rabbitmq rabbitmq-diagnostics -q ping
+    isolation:
+      recommended: One vhost and one application user per project
+    compose_default_host_bind_ip: 127.0.0.1
+    current_deployment_host_bind_ip: 0.0.0.0
     host_access:
       required: true
-      scope: "LAN and VPN"
+      scope: LAN and VPN
       amqp: true
       management_ui: true
       firewall_restricted: true
-
-    health:
-      command: "docker compose exec -T rabbitmq rabbitmq-diagnostics -q ping"
-
-    isolation:
-      recommended: "One vhost and one application user per project"
-
     notes:
-      - "Application projects should not use the bootstrap administrator account."
-
+    - Application projects should not use the bootstrap administrator account.
   n8n-db:
     managed_here: true
     lifecycle: infrastructure-private
     compose_service: n8n-db
     network: n8n-internal
-    internal_endpoint: "n8n-db:5432"
+    internal_endpoint: n8n-db:5432
     exposed_to_application_projects: false
-
     notes:
-      - "This PostgreSQL instance belongs only to n8n."
-      - "Application projects must not use it as their project database."
-
+    - This PostgreSQL instance belongs only to n8n.
+    - Application projects must not use it as their project database.
 defaults_for_other_services:
   postgres:
     managed_here: false
     lifecycle: project-specific-by-default
-
   qdrant:
     managed_here: false
     lifecycle: project-specific-by-default
-
   redis:
     managed_here: false
     lifecycle: project-specific-or-shared-by-explicit-decision
-
   celery:
     managed_here: false
     lifecycle: project-specific
-
   frontend:
     managed_here: false
     lifecycle: project-specific
-
   backend:
     managed_here: false
     lifecycle: project-specific
-
 runtime_verification:
   required: true
-
   commands:
-    - "docker ps --format 'table {{.Names}}\\t{{.Image}}\\t{{.Status}}\\t{{.Ports}}'"
-    - "docker network ls"
-    - "sudo ss -lntp"
-    - "nvidia-smi"
-
+  - docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+  - docker network ls
+  - sudo ss -lntp
+  - nvidia-smi
 llm_rules:
-  - "Start with docs/LLM_CONTEXT.md."
-  - "Read docs/ENGINEERING_GUIDELINES.md before planning architecture or generating code."
-  - "Read docs/INFRASTRUCTURE_INSTRUCTIONS.md before designing project infrastructure."
-  - "Read this services.yaml before adding infrastructure dependencies."
-  - "Do not duplicate a service with managed_here=true without a documented exception."
-  - "Verify runtime state; this file declares intended topology, not proof that a container is currently running."
-  - "If server access is unavailable, request the required runtime verification output."
-  - "Use Docker DNS/internal ports for container-to-container communication."
-  - "Keep application state project-specific unless a shared design is explicitly approved."
-  - "For the current deployment, host access to Ollama, n8n and RabbitMQ is intentionally available from LAN and VPN and must be restricted by firewall source networks."
+- Start with docs/LLM_CONTEXT.md.
+- Read docs/ENGINEERING_GUIDELINES.md before planning architecture or generating code.
+- If a project or task touches frontend, read docs/FRONTEND_GUIDELINES.md completely before generating or changing frontend code.
+- Read docs/INFRASTRUCTURE_INSTRUCTIONS.md before designing project infrastructure.
+- Read this services.yaml before adding infrastructure dependencies.
+- Do not duplicate a service with managed_here=true without a documented exception.
+- Verify runtime state; this file declares intended topology, not proof that a container is currently running.
+- If server access is unavailable, request the required runtime verification output.
+- Use Docker DNS/internal ports for container-to-container communication.
+- Keep application state project-specific unless a shared design is explicitly approved.
+- For the current deployment, host access to Ollama, n8n and RabbitMQ is intentionally available from LAN and VPN and must be restricted by firewall source networks.

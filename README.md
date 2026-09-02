@@ -46,6 +46,7 @@ shared-infrastructure/
 ├── docs/
 │   ├── LLM_CONTEXT.md
 │   ├── ENGINEERING_GUIDELINES.md
+│   ├── FRONTEND_GUIDELINES.md
 │   ├── INFRASTRUCTURE_INSTRUCTIONS.md
 │   └── services.yaml
 └── scripts/
@@ -66,11 +67,12 @@ docs/
 
 специально предназначена для передачи LLM при начале нового проекта.
 
-Программист может показать LLM только эти четыре файла:
+Программист может показать LLM только эти пять файлов:
 
 ```text
 LLM_CONTEXT.md
 ENGINEERING_GUIDELINES.md
+FRONTEND_GUIDELINES.md
 INFRASTRUCTURE_INSTRUCTIONS.md
 services.yaml
 ```
@@ -83,6 +85,10 @@ docs/LLM_CONTEXT.md
 
 LLM не обязана читать `README.md`, `PROJECT_INTEGRATION.md` или scripts этого
 repository для проектирования нового application project.
+
+Если проект содержит frontend или задача затрагивает HTML/CSS/JS/templates,
+`docs/FRONTEND_GUIDELINES.md` является обязательным frontend source of truth и
+MUST быть прочитан полностью.
 
 ---
 
@@ -535,6 +541,7 @@ scripts/
 ```text
 docs/LLM_CONTEXT.md
 docs/ENGINEERING_GUIDELINES.md
+docs/FRONTEND_GUIDELINES.md
 docs/INFRASTRUCTURE_INSTRUCTIONS.md
 docs/services.yaml
 ```
@@ -557,6 +564,7 @@ verification.
 ```text
 docs/LLM_CONTEXT.md
 docs/ENGINEERING_GUIDELINES.md
+docs/FRONTEND_GUIDELINES.md
 docs/INFRASTRUCTURE_INSTRUCTIONS.md
 docs/services.yaml
 README.md

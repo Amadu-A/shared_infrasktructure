@@ -13,6 +13,7 @@
 docs/
 ├── LLM_CONTEXT.md
 ├── ENGINEERING_GUIDELINES.md
+├── FRONTEND_GUIDELINES.md
 ├── INFRASTRUCTURE_INSTRUCTIONS.md
 └── services.yaml
 ```
@@ -25,6 +26,9 @@ docs/LLM_CONTEXT.md
 
 LLM должна сначала прочитать её и выполнить указанный там порядок.
 
+Если проект содержит frontend или задача затрагивает HTML/CSS/JS/templates,
+`docs/FRONTEND_GUIDELINES.md` MUST быть прочитан полностью.
+
 ## Что описывают файлы
 
 ```text
@@ -32,8 +36,12 @@ docs/LLM_CONTEXT.md
     порядок работы LLM и обязательные проверки
 
 docs/ENGINEERING_GUIDELINES.md
-    backend architecture, DI, SOLID, code style,
-    frontend, configuration, tests
+    backend architecture, DI, SOLID, Python code style,
+    documentation, logging, testing, configuration
+
+docs/FRONTEND_GUIDELINES.md
+    HTML, CSS, BEM, JavaScript, templates,
+    accessibility и frontend review checklist
 
 docs/INFRASTRUCTURE_INSTRUCTIONS.md
     Docker, shared services, networks, ports,

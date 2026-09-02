@@ -1,6 +1,6 @@
 <!-- docs/ENGINEERING_GUIDELINES.md -->
 
-# Engineering Guidelines: Architecture, Code Style, Frontend and Configuration
+# Engineering Guidelines: Architecture, Backend Code Style, Testing, Observability and Configuration
 
 > **Назначение:** единый набор инженерных правил для проектов, которые проектируются или сопровождаются с использованием `shared-infrastructure`.
 >
@@ -1663,510 +1663,42 @@ Application code при этом не меняется: источник кон�
 
 ---
 
-# Часть IX. Frontend architecture
+# Часть IX–XII. Frontend rules
 
-## 32. Главный frontend-принцип
-
-Frontend должен быть разделён по ответственности так же, как backend.
-
-Нельзя превращать:
+Подробные frontend rules вынесены в отдельный обязательный документ:
 
 ```text
-style.css
-app.js
-index.html
+docs/FRONTEND_GUIDELINES.md
 ```
 
-в три монолитных файла со всем приложением.
-
----
-
-## 33. HTML semantics
-
-Использовать семантические элементы по назначению:
-
-```html
-<header>
-<nav>
-<main>
-<section>
-<article>
-<aside>
-<footer>
-<form>
-<label>
-<button>
-```
-
-Не использовать `<div>` только потому, что он привычнее, если существует подходящий semantic element.
-
-### Кнопка и ссылка
-
-Действие:
-
-```html
-<button type="button">
-```
-
-Навигация:
-
-```html
-<a href="/profile">
-```
-
-Не делать ссылку через `onclick` на `<div>`.
-
----
-
-## 34. Базовая HTML структура
-
-Рекомендуется base template:
-
-```html
-<!doctype html>
-<html lang="ru">
-<head>
-    <meta charset="utf-8">
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1"
-    >
-
-    <link
-        rel="stylesheet"
-        href="/static/css/style.css"
-    >
-
-    <script
-        src="/static/js/api.js"
-        defer
-    ></script>
-
-    <script
-        src="/static/js/app.js"
-        defer
-    ></script>
-
-    {% block scripts %}{% endblock %}
-</head>
-
-<body class="page">
-    <header class="header">
-        ...
-    </header>
-
-    <main class="page__content">
-        {% block content %}{% endblock %}
-    </main>
-
-    <footer class="footer">
-        ...
-    </footer>
-</body>
-</html>
-```
-
-Common scripts идут в base template.
-
-Feature/page entry scripts подключаются через `scripts` block.
-
----
-
-## 35. JavaScript scripts
-
-Для обычных JS scripts MUST использоваться:
-
-```html
-<script
-    src="/static/js/profile.js"
-    defer
-></script>
-```
-
-Scripts SHOULD размещаться в `<head>`.
-
-Причины:
-
-- HTML не блокируется выполнением script;
-- порядок исполнения предсказуем;
-- зависимости подключены централизованно;
-- template не засоряется script tags внизу `body`.
-
-Для `type="module"` браузер уже использует deferred semantics, но структура подключения всё равно должна оставаться централизованной.
-
----
-
-## 36. Запрещённый inline JavaScript
-
-Не использовать:
-
-```html
-<button onclick="save()">Save</button>
-```
-
-Использовать stable JS hook:
-
-```html
-<button
-    type="button"
-    data-save-document
->
-    Save
-</button>
-```
-
-```javascript
-const saveButton = document.querySelector("[data-save-document]");
-
-saveButton?.addEventListener("click", handleSave);
-```
-
----
-
-## 37. CSS entrypoint
-
-HTML SHOULD подключать только один основной CSS entrypoint:
-
-```html
-<link
-    rel="stylesheet"
-    href="/static/css/style.css"
->
-```
-
-`style.css` — агрегатор imports.
-
-Он SHOULD содержать минимум собственных selectors.
-
-Пример:
-
-```css
-/* tokens / base */
-@import url("./variables.css");
-@import url("./global.css");
-
-/* layout */
-@import url("./blocks/page.css");
-@import url("./blocks/header.css");
-@import url("./blocks/sidebar.css");
-
-/* reusable UI */
-@import url("./blocks/button.css");
-@import url("./blocks/form.css");
-@import url("./blocks/modal.css");
-@import url("./blocks/table.css");
-
-/* feature blocks */
-@import url("./blocks/upload.css");
-@import url("./blocks/analysis-result.css");
-@import url("./blocks/knowledge-base.css");
-
-/* responsive overrides */
-@import url("./responsive.css");
-```
-
----
-
-## 38. CSS modules — блоки, а не страницы
-
-Целевая структура:
+Если проект или задача затрагивает:
 
 ```text
-static/
-└── css/
-    ├── style.css
-    ├── variables.css
-    ├── global.css
-    ├── responsive.css
-    └── blocks/
-        ├── page.css
-        ├── header.css
-        ├── sidebar.css
-        ├── button.css
-        ├── form.css
-        ├── modal.css
-        ├── table.css
-        ├── upload.css
-        ├── analysis-result.css
-        └── knowledge-base.css
+HTML;
+CSS;
+JavaScript / TypeScript;
+templates;
+browser UI;
+frontend components;
 ```
 
-Файл SHOULD соответствовать:
+LLM/developer MUST полностью прочитать `FRONTEND_GUIDELINES.md` до
+проектирования или изменения frontend.
 
-- reusable block;
-- layout block;
-- cohesive feature section;
-- shared UI component.
+Этот документ не дублирует BEM/CSS/HTML/JS rules, чтобы не создавать две
+расходящиеся copies одного frontend standard.
 
-Не создавать по умолчанию:
+Общие требования этого файла продолжают действовать для frontend-кода,
+включая:
 
 ```text
-index.css
-profile-page.css
-admin-page-all.css
-everything.css
+относительный путь каждого файла;
+русскую документацию файлов/functions/classes;
+testing ключевой логики;
+quality gates;
+logging/observability там, где применимо;
+configuration rules.
 ```
-
-если файл просто собирает несвязанные стили всей страницы.
-
-Page-specific stylesheet допустим только когда страница сама является отдельной изолированной feature area и файл всё равно сохраняет одну ответственность.
-
----
-
-## 39. BEM
-
-Базовое именование:
-
-```text
-block
-block__element
-block--modifier
-block__element--modifier
-```
-
-Пример:
-
-```html
-<section class="analysis-card analysis-card--warning">
-    <h2 class="analysis-card__title">
-        Риск
-    </h2>
-
-    <p class="analysis-card__description">
-        ...
-    </p>
-</section>
-```
-
-Не рекомендуется:
-
-```css
-#main .content div.item span.red.active
-```
-
-Предпочтительно:
-
-```css
-.analysis-card__description
-```
-
----
-
-## 40. State classes
-
-Для UI-state MAY использоваться отдельные классы:
-
-```text
-is-hidden
-is-loading
-is-disabled
-has-error
-```
-
-State class не заменяет BEM block, а описывает временное состояние.
-
----
-
-## 41. CSS variables
-
-Повторяющиеся design values SHOULD быть tokens:
-
-```css
-:root {
-    --color-background: #ffffff;
-    --color-text: #1f2937;
-    --space-1: 0.25rem;
-    --space-2: 0.5rem;
-    --radius-md: 0.5rem;
-}
-```
-
-Не дублировать один и тот же magic color/spacing десятки раз.
-
----
-
-## 42. Inline CSS
-
-Не использовать:
-
-```html
-<div style="margin-top: 17px; color: red;">
-```
-
-Исключение — действительно динамическое значение, которое невозможно разумно выразить классом/custom property.
-
-Не размещать большие `<style>` blocks в templates.
-
----
-
-# Часть X. Frontend JavaScript
-
-## 43. Разделение JS
-
-Рекомендуется:
-
-```text
-static/js/
-├── api.js
-├── app.js
-├── auth.js
-├── components/
-│   ├── modal.js
-│   └── notifications.js
-└── features/
-    ├── upload.js
-    ├── analysis.js
-    ├── history.js
-    └── knowledge-base.js
-```
-
-`api.js`:
-
-- HTTP requests;
-- common error parsing;
-- auth headers/cookies policy.
-
-Feature module:
-
-- DOM orchestration конкретной feature;
-- feature state;
-- event handlers.
-
-Не смешивать все страницы в одном огромном `app.js`.
-
----
-
-## 44. JS hooks отдельно от CSS styling
-
-Для JS предпочтительно использовать:
-
-```text
-data-*
-```
-
-Пример:
-
-```html
-<button
-    class="button button--primary"
-    data-analysis-start
->
-    Анализировать
-</button>
-```
-
-CSS использует:
-
-```text
-.button
-.button--primary
-```
-
-JS использует:
-
-```text
-[data-analysis-start]
-```
-
-Так визуальный refactoring не ломает JavaScript.
-
----
-
-## 45. DOM safety
-
-Не вставлять недоверенный пользовательский текст через `innerHTML`.
-
-Предпочитать:
-
-```javascript
-element.textContent = value;
-```
-
-Если HTML действительно нужен, входные данные MUST быть sanitised подходящим инструментом.
-
----
-
-## 46. Accessibility
-
-Frontend SHOULD обеспечивать:
-
-- связанный `label` для inputs;
-- доступность keyboard navigation;
-- `aria-label` для icon-only controls;
-- `role="status"` / `aria-live` для динамического статуса, когда это нужно;
-- видимый focus;
-- корректный `disabled`;
-- достаточную semantic structure;
-- отсутствие кликабельных `<div>` вместо button/link.
-
-ARIA не должна заменять корректный native semantic element.
-
----
-
-# Часть XI. Templates
-
-## 47. Base template и partials
-
-Повторяющаяся разметка SHOULD выноситься:
-
-```text
-templates/
-├── base.html
-├── components/
-│   ├── header.html
-│   ├── modal.html
-│   └── pagination.html
-└── pages/
-```
-
-Нельзя копировать одинаковый header/modal/forms markup между страницами.
-
----
-
-## 48. Templates не содержат business logic
-
-Допустимо:
-
-```jinja2
-{% if user.is_authenticated %}
-```
-
-Не стоит переносить в Jinja сложные вычисления, выбор бизнес-стратегии или data-access.
-
-Template получает подготовленный context/DTO.
-
----
-
-# Часть XII. API и frontend
-
-## 49. API layer
-
-JS SHOULD обращаться к backend через выделенный API helper.
-
-Плохо:
-
-```javascript
-fetch(...)
-```
-
-с разной обработкой ошибок в двадцати обработчиках.
-
-Лучше:
-
-```javascript
-await apiRequest("/api/v1/documents", {
-    method: "POST",
-    body: formData,
-});
-```
-
-Common API client должен централизовать:
-
-- base URL;
-- headers;
-- credentials;
-- JSON parsing;
-- standard error shape.
 
 ---
 
@@ -2375,11 +1907,13 @@ LLM MUST:
 1. прочитать этот документ;
 2. прочитать project-specific README/architecture docs;
 3. прочитать `docs/LLM_CONTEXT.md`;
-4. проверить `docs/services.yaml`, если затрагивается shared infrastructure;
-5. определить shared vs project-specific dependencies;
-6. определить application boundaries;
-7. определить interfaces/ports;
-8. только после этого предлагать файлы и код.
+4. если задача затрагивает frontend — полностью прочитать
+   `docs/FRONTEND_GUIDELINES.md`;
+5. проверить `docs/services.yaml`, если затрагивается shared infrastructure;
+6. определить shared vs project-specific dependencies;
+7. определить application boundaries;
+8. определить interfaces/ports;
+9. только после этого предлагать файлы и код.
 
 ---
 
@@ -2396,6 +1930,8 @@ Reference project — пример, а не источник истины.
 - содержит устаревший workaround;
 
 LLM SHOULD следовать текущим правилам, а не повторять legacy pattern.
+
+Для frontend текущие правила определяются `docs/FRONTEND_GUIDELINES.md`.
 
 ---
 
@@ -2437,16 +1973,13 @@ LLM MUST явно указать:
 
 ### Frontend
 
-- один `style.css` entrypoint;
-- CSS imports из отдельных modules;
-- BEM;
-- semantic HTML;
-- `header/main/footer/section/aside`;
-- scripts в `<head>` с `defer`;
-- base template;
-- page/feature scripts через template block;
-- `data-*` hooks;
-- accessibility attributes.
+Frontend patterns являются source of truth в:
+
+```text
+docs/FRONTEND_GUIDELINES.md
+```
+
+При frontend-задаче этот файл MUST быть прочитан полностью.
 
 ### Configuration
 
@@ -2519,19 +2052,14 @@ LLM MUST явно указать:
 
 ## 60. Frontend
 
-- [ ] Используется semantic HTML.
-- [ ] Повторяемая разметка вынесена в base/partials.
-- [ ] BEM соблюдён.
-- [ ] Нет больших inline `<style>`.
-- [ ] Нет inline `onclick`.
-- [ ] HTML подключает основной `style.css`.
-- [ ] `style.css` агрегирует block/module CSS.
-- [ ] CSS файлы соответствуют blocks/features, а не случайным страницам.
-- [ ] Scripts подключены в `<head>` с `defer` или `type="module"`.
-- [ ] Common JS и feature JS разделены.
-- [ ] JS использует `data-*` hooks там, где это разумно.
-- [ ] Dynamic status и controls доступны с keyboard/screen reader.
-- [ ] Недоверенные данные не вставляются через raw `innerHTML`.
+Frontend review checklist вынесен в:
+
+```text
+docs/FRONTEND_GUIDELINES.md
+```
+
+При изменении frontend checklist из этого документа MUST быть выполнен
+полностью перед завершением задачи или merge.
 
 ---
 
@@ -2569,11 +2097,16 @@ data access;
 transactions;
 Python code style;
 документирование кода;
-frontend structure;
 configuration;
 logging / observability;
 testing;
 quality gates.
+```
+
+Frontend architecture/code style находится в отдельном обязательном source of truth:
+
+```text
+docs/FRONTEND_GUIDELINES.md
 ```
 
 Project-specific требования MAY уточнять этот baseline, если это необходимо
@@ -2674,16 +2207,7 @@ external APIs
 
 Frontend:
 
-base.html
-   ├── style.css
-   │     ├── global/tokens
-   │     ├── layout blocks
-   │     ├── UI blocks
-   │     └── feature blocks
-   │
-   └── JS with defer
-         ├── common API/app
-         └── feature modules
+см. docs/FRONTEND_GUIDELINES.md
 
 Configuration:
 
