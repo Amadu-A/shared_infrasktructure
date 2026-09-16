@@ -64,7 +64,12 @@ fi
 
 echo
 echo "=== n8n ==="
-if curl -fsS "http://127.0.0.1:${N8N_PORT}/healthz" >/dev/null 2>&1; then
+if docker compose exec -T n8n \
+  node -e \
+  "fetch('http://127.0.0.1:5678/healthz')
+    .then(r => process.exit(r.ok ? 0 : 1))
+    .catch(() => process.exit(1))" \
+  >/dev/null 2>&1; then
   ok "n8n healthz"
 else
   bad "n8n healthz"
