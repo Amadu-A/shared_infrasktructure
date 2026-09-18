@@ -3,6 +3,12 @@
 name: ${COMPOSE_PROJECT_NAME:-shared}
 
 services:
+  # -------------------------------------------------------------------------
+  # Transitional Ollama
+  # -------------------------------------------------------------------------
+  #
+  # Existing consumers may continue using Ollama during migration.
+  # New AI consumers should prefer shared-vlm / shared-embedding.
   ollama:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.32.12}
     restart: unless-stopped
@@ -11,14 +17,13 @@ services:
       - "${SHARED_BIND_IP:-0.0.0.0}:${OLLAMA_HOST_PORT:-11434}:11434"
 
     environment:
+      CUDA_DEVICE_ORDER: PCI_BUS_ID
+      CUDA_VISIBLE_DEVICES: ${OLLAMA_GPU_DEVICES:-0}
+
       OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-1m}
       OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-1}
       OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-1}
-
-      # 70k — компромисс между длинным контекстом
-      # и ограничением RTX 3090 24 GB.
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-70000}
-
       OLLAMA_FLASH_ATTENTION: ${OLLAMA_FLASH_ATTENTION:-1}
       OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-q8_0}
 
@@ -28,14 +33,7 @@ services:
     networks:
       - ai-shared
 
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities:
-                - gpu
+    gpus: all
 
     healthcheck:
       test:
@@ -47,6 +45,224 @@ services:
       retries: 5
       start_period: 20s
 
+  # -------------------------------------------------------------------------
+  # Shared generation / vision-language inference
+  # -------------------------------------------------------------------------
+  shared-vlm:
+    profiles:
+      - ai-vlm
+
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.29.0}
+    restart: unless-stopped
+
+    ipc: host
+
+    ports:
+      - "${SHARED_VLM_BIND_IP:-0.0.0.0}:${SHARED_VLM_HOST_PORT:-8000}:8000"
+
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+
+      CUDA_DEVICE_ORDER: ${VLLM_CUDA_DEVICE_ORDER:-PCI_BUS_ID}
+      CUDA_VISIBLE_DEVICES: ${SHARED_VLM_GPU_DEVICES:-0}
+
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - vllm-cache:/root/.cache/vllm
+
+    networks:
+      - ai-shared
+
+    gpus: all
+
+    command:
+      - --model
+      - "${SHARED_VLM_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
+
+      - --served-model-name
+      - "${SHARED_VLM_MODEL_ALIAS:-shared-vlm}"
+
+      - --api-key
+      - "${SHARED_VLM_API_KEY:-CHANGE_ME_GENERATE_A_STRONG_API_KEY}"
+
+      - --host
+      - "0.0.0.0"
+
+      - --port
+      - "8000"
+
+      - --tensor-parallel-size
+      - "${SHARED_VLM_TP_SIZE:-1}"
+
+      - --max-model-len
+      - "${SHARED_VLM_MAX_MODEL_LEN:-8192}"
+
+      - --gpu-memory-utilization
+      - "${SHARED_VLM_GPU_MEMORY_UTILIZATION:-0.90}"
+
+      - --max-num-seqs
+      - "${SHARED_VLM_MAX_NUM_SEQS:-8}"
+
+      - --max-num-queued-reqs
+      - "${SHARED_VLM_MAX_NUM_QUEUED_REQS:-32}"
+
+      - --max-num-queued-tokens
+      - "${SHARED_VLM_MAX_NUM_QUEUED_TOKENS:-32768}"
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+              "http://127.0.0.1:8000/health",
+              timeout=5,
+          )
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 15m
+
+  # -------------------------------------------------------------------------
+  # Shared multimodal embedding
+  # -------------------------------------------------------------------------
+  shared-embedding:
+    profiles:
+      - ai-embedding
+
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.29.0}
+    restart: unless-stopped
+
+    ipc: host
+
+    ports:
+      - "${SHARED_EMBEDDING_BIND_IP:-0.0.0.0}:${SHARED_EMBEDDING_HOST_PORT:-8001}:8000"
+
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      HF_TOKEN: ${HF_TOKEN:-}
+
+      CUDA_DEVICE_ORDER: ${VLLM_CUDA_DEVICE_ORDER:-PCI_BUS_ID}
+      CUDA_VISIBLE_DEVICES: ${SHARED_EMBEDDING_GPU_DEVICES:-0}
+
+    volumes:
+      - huggingface-cache:/root/.cache/huggingface
+      - vllm-cache:/root/.cache/vllm
+
+    networks:
+      - ai-shared
+
+    gpus: all
+
+    command:
+      - --model
+      - "${SHARED_EMBEDDING_MODEL_ID:-Qwen/Qwen3-VL-Embedding-8B}"
+
+      - --served-model-name
+      - "${SHARED_EMBEDDING_MODEL_ALIAS:-shared-embedding}"
+
+      - --api-key
+      - "${SHARED_EMBEDDING_API_KEY:-CHANGE_ME_GENERATE_A_STRONG_API_KEY}"
+
+      - --runner
+      - pooling
+
+      - --host
+      - "0.0.0.0"
+
+      - --port
+      - "8000"
+
+      - --tensor-parallel-size
+      - "${SHARED_EMBEDDING_TP_SIZE:-1}"
+
+      - --max-model-len
+      - "${SHARED_EMBEDDING_MAX_MODEL_LEN:-8192}"
+
+      - --gpu-memory-utilization
+      - "${SHARED_EMBEDDING_GPU_MEMORY_UTILIZATION:-0.90}"
+
+      - --max-num-seqs
+      - "${SHARED_EMBEDDING_MAX_NUM_SEQS:-8}"
+
+      - --max-num-queued-reqs
+      - "${SHARED_EMBEDDING_MAX_NUM_QUEUED_REQS:-32}"
+
+      - --max-num-queued-tokens
+      - "${SHARED_EMBEDDING_MAX_NUM_QUEUED_TOKENS:-32768}"
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+              "http://127.0.0.1:8000/health",
+              timeout=5,
+          )
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 15m
+
+  # -------------------------------------------------------------------------
+  # Human-facing shared model UI
+  # -------------------------------------------------------------------------
+  open-webui:
+    profiles:
+      - ai-ui
+
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.3}
+    restart: unless-stopped
+
+    ports:
+      - "${OPEN_WEBUI_BIND_IP:-0.0.0.0}:${OPEN_WEBUI_HOST_PORT:-3000}:8080"
+
+    environment:
+      WEBUI_NAME: ${OPEN_WEBUI_NAME:-Shared AI}
+      WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32}
+
+      # Infrastructure configuration remains authoritative after recreate.
+      # Chats/accounts/data still persist in open-webui-data.
+      ENABLE_PERSISTENT_CONFIG: ${OPEN_WEBUI_ENABLE_PERSISTENT_CONFIG:-false}
+
+      ENABLE_OPENAI_API: "true"
+      OPENAI_API_BASE_URL: http://shared-vlm:8000/v1
+      OPENAI_API_KEY: ${SHARED_VLM_API_KEY:-CHANGE_ME_GENERATE_A_STRONG_API_KEY}
+
+      ENABLE_OLLAMA_API: ${OPEN_WEBUI_ENABLE_OLLAMA_API:-false}
+      OLLAMA_BASE_URL: http://ollama:11434
+
+    volumes:
+      - open-webui-data:/app/backend/data
+
+    networks:
+      - ai-shared
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+              "http://127.0.0.1:8080/health",
+              timeout=5,
+          )
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # -------------------------------------------------------------------------
+  # n8n private database
+  # -------------------------------------------------------------------------
   n8n-db:
     image: ${N8N_POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
@@ -71,6 +287,9 @@ services:
       retries: 10
       start_period: 10s
 
+  # -------------------------------------------------------------------------
+  # n8n
+  # -------------------------------------------------------------------------
   n8n:
     image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:2.34.5}
     restart: unless-stopped
@@ -80,7 +299,7 @@ services:
         condition: service_healthy
 
     ports:
-      - "${N8N_BIND_IP:-127.0.0.1}:${N8N_HOST_PORT:-5678}:5678"
+      - "${N8N_BIND_IP:-0.0.0.0}:${N8N_HOST_PORT:-5678}:5678"
 
     environment:
       DB_TYPE: postgresdb
@@ -92,6 +311,7 @@ services:
       DB_POSTGRESDB_SCHEMA: public
 
       N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY must be set in .env or process environment}
+
       N8N_PORT: 5678
       N8N_PROTOCOL: http
       N8N_SECURE_COOKIE: "false"
@@ -122,13 +342,16 @@ services:
       retries: 5
       start_period: 40s
 
+  # -------------------------------------------------------------------------
+  # RabbitMQ
+  # -------------------------------------------------------------------------
   rabbitmq:
     image: ${RABBITMQ_IMAGE:-rabbitmq:4.1-management}
     restart: unless-stopped
 
     ports:
-      - "${RABBITMQ_BIND_IP:-127.0.0.1}:${RABBITMQ_AMQP_HOST_PORT:-5672}:5672"
-      - "${RABBITMQ_BIND_IP:-127.0.0.1}:${RABBITMQ_MANAGEMENT_HOST_PORT:-15672}:15672"
+      - "${RABBITMQ_BIND_IP:-0.0.0.0}:${RABBITMQ_AMQP_HOST_PORT:-5672}:5672"
+      - "${RABBITMQ_BIND_IP:-0.0.0.0}:${RABBITMQ_MANAGEMENT_HOST_PORT:-15672}:15672"
 
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shared_admin}
@@ -160,7 +383,10 @@ networks:
     internal: true
 
 volumes:
+  huggingface-cache:
+  vllm-cache:
   ollama-data:
+  open-webui-data:
   n8n-data:
   n8n-db-data:
   rabbitmq-data:

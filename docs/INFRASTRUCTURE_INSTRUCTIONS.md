@@ -192,14 +192,22 @@ Application project MUST NOT поднимать собственный Ollama/vL
 
 ### 6.1. Stable contracts
 
-Проекты должны использовать logical endpoints:
+Для containers на том же Docker host использовать:
 
 ```text
 http://shared-vlm:8000/v1
-http://shared-embedding:8000/v1
+http://shared-embedding:8000
 ```
 
-и logical model names:
+Для clients на другом компьютере или сервере использовать опубликованные host
+endpoints:
+
+```text
+http://<shared-host>:<VLM-host-port>/v1
+http://<shared-host>:<embedding-host-port>
+```
+
+Logical model names:
 
 ```text
 shared-vlm
@@ -229,17 +237,15 @@ Tensor Parallel size;
 context limit;
 GPU memory utilization;
 concurrency limits;
-queue limits.
+queue limits;
+bind IP;
+host port.
 ```
 
 Они MUST задаваться через deployment configuration / environment variables,
 а не hardcode внутри business projects.
 
 Один и тот же shared Compose должен поддерживать разные GPU hosts.
-
-Например single-GPU development server и multi-GPU production server используют
-одни logical endpoints, но могут использовать разные physical models и runtime
-limits.
 
 Resource capacity конкретного host является ответственностью deployment
 operator, а не application architecture.
@@ -342,7 +348,21 @@ Open WebUI не является source of truth для vLLM model lifecycle.
 Start/stop/restart inference и model cache administration выполняются shared
 Compose/scripts.
 
-### 6.8. Ollama transition
+### 6.8. LAN/VPN publication
+
+Managed shared service, который предоставляет application API, user UI или
+administration UI, MUST иметь configurable published host endpoint.
+
+По умолчанию shared stack MAY использовать `0.0.0.0`, если host firewall
+ограничивает доступ разрешёнными LAN/VPN source networks.
+
+Infrastructure-private dependency, например `n8n-db`, SHOULD оставаться только
+во внутренней Docker network.
+
+Application-level API key является дополнительной защитой, но MUST NOT
+рассматриваться как замена firewall.
+
+### 6.9. Ollama transition
 
 Ollama является transitional shared service.
 
@@ -359,7 +379,7 @@ new/migrated consumers -> shared-vlm
 Ollama удаляется только после проверки, что active consumers больше от него
 не зависят.
 
-### 6.9. Что сейчас не добавляется
+### 6.10. Что сейчас не добавляется
 
 Без отдельного архитектурного решения MUST NOT добавляться:
 
@@ -618,54 +638,57 @@ Internal databases, Redis и brokers SHOULD NOT публиковать host port
 
 ## 17. Настраиваемые host ports
 
-Host ports, которые действительно нужны, MUST быть configurable через
-environment variables или Compose parameters.
+Host ports shared services MUST быть configurable через environment variables.
 
-Пример:
+Для shared infrastructure API/UI публикация host port является нормальной
+частью architecture, потому что services могут использоваться:
 
-```yaml
-ports:
-  - "${API_BIND_IP:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
+```text
+с containers на том же host;
+с другого компьютера;
+с другого application server;
+из trusted LAN/VPN.
 ```
 
-Это **не означает**, что переменные MUST находиться в `.env`.
+Container-to-container traffic на том же host всё равно SHOULD использовать
+Docker DNS и internal port.
 
-Baseline non-secret value может быть:
-
-1. безопасным default в Compose;
-2. документированным в `.env.example`.
-
-`.env` добавляет только environment-specific override.
+`.env.example` документирует полный каталог bind IP и host port variables.
 
 ---
 
 ## 18. Binding interfaces
 
-Безопасный default для административных/internal interfaces:
+Для managed shared API/UI services baseline:
 
 ```text
-127.0.0.1
+0.0.0.0
 ```
 
-`0.0.0.0` означает bind на всех interfaces host.
+допустим и ожидаем, если host firewall ограничивает доступ разрешёнными
+LAN/VPN source networks.
 
-Он MAY использоваться только осознанно, когда внешняя доступность действительно
-нужна и есть соответствующая network protection.
+Deployment MAY вместо `0.0.0.0` указать конкретный LAN IP host.
 
-Для разных сервисов MAY использоваться разные bind variables:
+Примеры отдельных bind variables:
 
 ```text
+SHARED_VLM_BIND_IP
+SHARED_EMBEDDING_BIND_IP
+OPEN_WEBUI_BIND_IP
 SHARED_BIND_IP
 N8N_BIND_IP
 RABBITMQ_BIND_IP
 ```
 
-Это позволяет, например, открыть Open WebUI для LAN, но оставить inference
-workers и RabbitMQ Management только на localhost.
+Infrastructure-private dependencies SHOULD не иметь published host port.
+
+Пример: `n8n-db` не публикуется наружу и доступен только внутри private Docker
+network.
 
 ---
 
-## 19. localhost внутри Docker
+## 19. localhost внутри Docker и host access
 
 В container:
 
@@ -676,15 +699,26 @@ localhost
 
 означают текущий container.
 
-Для другого service использовать Docker DNS:
+Для другого service на том же Docker host использовать Docker DNS:
 
 ```text
 http://shared-vlm:8000/v1
-http://shared-embedding:8000/v1
+http://shared-embedding:8000
 http://ollama:11434
 http://n8n:5678
 rabbitmq:5672
 postgres:5432
+```
+
+Для client на другом host использовать IP/DNS shared server и опубликованный
+host port.
+
+Например:
+
+```text
+http://<shared-host>:8000/v1
+http://<shared-host>:8001
+http://<shared-host>:3000
 ```
 
 ---

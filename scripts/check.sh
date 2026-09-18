@@ -10,9 +10,27 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-OLLAMA_PORT="${OLLAMA_HOST_PORT:-11434}"
-N8N_PORT="${N8N_HOST_PORT:-5678}"
+PROJECT_NAME="${COMPOSE_PROJECT_NAME:-shared}"
 NETWORK_NAME="${SHARED_NETWORK_NAME:-ai-shared}"
+
+SHARED_VLM_BIND_IP="${SHARED_VLM_BIND_IP:-0.0.0.0}"
+SHARED_VLM_HOST_PORT="${SHARED_VLM_HOST_PORT:-8000}"
+
+SHARED_EMBEDDING_BIND_IP="${SHARED_EMBEDDING_BIND_IP:-0.0.0.0}"
+SHARED_EMBEDDING_HOST_PORT="${SHARED_EMBEDDING_HOST_PORT:-8001}"
+
+OPEN_WEBUI_BIND_IP="${OPEN_WEBUI_BIND_IP:-0.0.0.0}"
+OPEN_WEBUI_HOST_PORT="${OPEN_WEBUI_HOST_PORT:-3000}"
+
+SHARED_BIND_IP="${SHARED_BIND_IP:-0.0.0.0}"
+OLLAMA_HOST_PORT="${OLLAMA_HOST_PORT:-11434}"
+
+N8N_BIND_IP="${N8N_BIND_IP:-0.0.0.0}"
+N8N_HOST_PORT="${N8N_HOST_PORT:-5678}"
+
+RABBITMQ_BIND_IP="${RABBITMQ_BIND_IP:-0.0.0.0}"
+RABBITMQ_AMQP_HOST_PORT="${RABBITMQ_AMQP_HOST_PORT:-5672}"
+RABBITMQ_MANAGEMENT_HOST_PORT="${RABBITMQ_MANAGEMENT_HOST_PORT:-15672}"
 
 fail=0
 
@@ -25,14 +43,56 @@ bad() {
   fail=1
 }
 
+skip() {
+  printf '[SKIP] %s\n' "$1"
+}
+
+check_ip() {
+  case "$1" in
+    0.0.0.0|"::"|"[::]")
+      printf '127.0.0.1'
+      ;;
+    *)
+      printf '%s' "$1"
+      ;;
+  esac
+}
+
+display_host() {
+  case "$1" in
+    0.0.0.0|"::"|"[::]")
+      printf '<host-ip>'
+      ;;
+    *)
+      printf '%s' "$1"
+      ;;
+  esac
+}
+
+running_services="$(
+  docker ps \
+    --filter "label=com.docker.compose.project=${PROJECT_NAME}" \
+    --format '{{.Label "com.docker.compose.service"}}' \
+    2>/dev/null || true
+)"
+
+service_running() {
+  grep -Fxq "$1" <<<"${running_services}"
+}
+
 echo "=== Docker ==="
+
 if docker info >/dev/null 2>&1; then
   ok "Docker daemon"
 else
   bad "Docker daemon"
 fi
 
-if docker compose config --quiet >/dev/null 2>&1; then
+if docker compose \
+  --profile ai-vlm \
+  --profile ai-embedding \
+  --profile ai-ui \
+  config --quiet >/dev/null 2>&1; then
   ok "Compose config"
 else
   bad "Compose config"
@@ -46,15 +106,15 @@ fi
 
 echo
 echo "=== Containers ==="
-docker compose ps || fail=1
+
+docker compose \
+  --profile ai-vlm \
+  --profile ai-embedding \
+  --profile ai-ui \
+  ps || fail=1
 
 echo
-echo "=== Ollama ==="
-if curl -fsS "http://127.0.0.1:${OLLAMA_PORT}/api/tags" >/dev/null 2>&1; then
-  ok "Ollama HTTP"
-else
-  bad "Ollama HTTP"
-fi
+echo "=== NVIDIA ==="
 
 if nvidia-smi >/dev/null 2>&1; then
   ok "NVIDIA GPU"
@@ -63,27 +123,184 @@ else
 fi
 
 echo
-echo "=== n8n ==="
-if docker compose exec -T n8n \
-  node -e \
-  "fetch('http://127.0.0.1:5678/healthz')
-    .then(r => process.exit(r.ok ? 0 : 1))
-    .catch(() => process.exit(1))" \
-  >/dev/null 2>&1; then
-  ok "n8n healthz"
+echo "=== Ollama ==="
+
+if service_running "ollama"; then
+  ollama_check_ip="$(check_ip "${SHARED_BIND_IP}")"
+
+  if curl -fsS \
+    "http://${ollama_check_ip}:${OLLAMA_HOST_PORT}/api/tags" \
+    >/dev/null 2>&1; then
+    ok "Ollama HTTP"
+  else
+    bad "Ollama HTTP"
+  fi
 else
-  bad "n8n healthz"
+  bad "Ollama container is not running"
+fi
+
+echo
+echo "=== shared-vlm ==="
+
+if service_running "shared-vlm"; then
+  vlm_check_ip="$(check_ip "${SHARED_VLM_BIND_IP}")"
+
+  if curl -fsS \
+    "http://${vlm_check_ip}:${SHARED_VLM_HOST_PORT}/health" \
+    >/dev/null 2>&1; then
+    ok "shared-vlm health"
+  else
+    bad "shared-vlm health"
+  fi
+
+  if curl -fsS \
+    -H "Authorization: Bearer ${SHARED_VLM_API_KEY:-}" \
+    "http://${vlm_check_ip}:${SHARED_VLM_HOST_PORT}/v1/models" \
+    >/dev/null 2>&1; then
+    ok "shared-vlm authenticated API"
+  else
+    bad "shared-vlm authenticated API"
+  fi
+else
+  skip "shared-vlm is not running"
+fi
+
+echo
+echo "=== shared-embedding ==="
+
+if service_running "shared-embedding"; then
+  embedding_check_ip="$(check_ip "${SHARED_EMBEDDING_BIND_IP}")"
+
+  if curl -fsS \
+    "http://${embedding_check_ip}:${SHARED_EMBEDDING_HOST_PORT}/health" \
+    >/dev/null 2>&1; then
+    ok "shared-embedding health"
+  else
+    bad "shared-embedding health"
+  fi
+
+  if curl -fsS \
+    -H "Authorization: Bearer ${SHARED_EMBEDDING_API_KEY:-}" \
+    "http://${embedding_check_ip}:${SHARED_EMBEDDING_HOST_PORT}/v1/models" \
+    >/dev/null 2>&1; then
+    ok "shared-embedding authenticated API"
+  else
+    bad "shared-embedding authenticated API"
+  fi
+else
+  skip "shared-embedding is not running"
+fi
+
+echo
+echo "=== Open WebUI ==="
+
+if service_running "open-webui"; then
+  webui_check_ip="$(check_ip "${OPEN_WEBUI_BIND_IP}")"
+
+  if curl -fsS \
+    "http://${webui_check_ip}:${OPEN_WEBUI_HOST_PORT}/health" \
+    >/dev/null 2>&1; then
+    ok "Open WebUI health"
+  else
+    bad "Open WebUI health"
+  fi
+else
+  skip "Open WebUI is not running"
+fi
+
+echo
+echo "=== n8n ==="
+
+if service_running "n8n"; then
+  n8n_check_ip="$(check_ip "${N8N_BIND_IP}")"
+
+  if curl -fsS \
+    "http://${n8n_check_ip}:${N8N_HOST_PORT}/healthz" \
+    >/dev/null 2>&1; then
+    ok "n8n healthz"
+  else
+    bad "n8n healthz"
+  fi
+else
+  bad "n8n container is not running"
+fi
+
+echo
+echo "=== n8n-db ==="
+
+if service_running "n8n-db"; then
+  if docker compose exec -T n8n-db \
+    pg_isready \
+      -U "${N8N_DB_USER:-n8n}" \
+      -d "${N8N_DB_NAME:-n8n}" \
+    >/dev/null 2>&1; then
+    ok "n8n-db"
+  else
+    bad "n8n-db"
+  fi
+else
+  bad "n8n-db container is not running"
 fi
 
 echo
 echo "=== RabbitMQ ==="
-if docker compose exec -T rabbitmq rabbitmq-diagnostics -q ping >/dev/null 2>&1; then
-  ok "RabbitMQ"
+
+if service_running "rabbitmq"; then
+  if docker compose exec -T rabbitmq \
+    rabbitmq-diagnostics -q ping \
+    >/dev/null 2>&1; then
+    ok "RabbitMQ broker"
+  else
+    bad "RabbitMQ broker"
+  fi
+
+  rabbitmq_check_ip="$(check_ip "${RABBITMQ_BIND_IP}")"
+
+  if curl -fsS \
+    -u "${RABBITMQ_DEFAULT_USER:-shared_admin}:${RABBITMQ_DEFAULT_PASS:-}" \
+    "http://${rabbitmq_check_ip}:${RABBITMQ_MANAGEMENT_HOST_PORT}/api/overview" \
+    >/dev/null 2>&1; then
+    ok "RabbitMQ Management HTTP"
+  else
+    bad "RabbitMQ Management HTTP"
+  fi
 else
-  bad "RabbitMQ"
+  bad "RabbitMQ container is not running"
 fi
 
 echo
+echo "=== Published endpoints ==="
+
+printf 'shared-vlm:       http://%s:%s/v1\n' \
+  "$(display_host "${SHARED_VLM_BIND_IP}")" \
+  "${SHARED_VLM_HOST_PORT}"
+
+printf 'shared-embedding: http://%s:%s\n' \
+  "$(display_host "${SHARED_EMBEDDING_BIND_IP}")" \
+  "${SHARED_EMBEDDING_HOST_PORT}"
+
+printf 'Open WebUI:       http://%s:%s\n' \
+  "$(display_host "${OPEN_WEBUI_BIND_IP}")" \
+  "${OPEN_WEBUI_HOST_PORT}"
+
+printf 'Ollama:           http://%s:%s\n' \
+  "$(display_host "${SHARED_BIND_IP}")" \
+  "${OLLAMA_HOST_PORT}"
+
+printf 'n8n:              http://%s:%s\n' \
+  "$(display_host "${N8N_BIND_IP}")" \
+  "${N8N_HOST_PORT}"
+
+printf 'RabbitMQ AMQP:    %s:%s\n' \
+  "$(display_host "${RABBITMQ_BIND_IP}")" \
+  "${RABBITMQ_AMQP_HOST_PORT}"
+
+printf 'RabbitMQ UI:      http://%s:%s\n' \
+  "$(display_host "${RABBITMQ_BIND_IP}")" \
+  "${RABBITMQ_MANAGEMENT_HOST_PORT}"
+
+echo
+
 if [[ "${fail}" -eq 0 ]]; then
   echo "ALL CHECKS PASSED"
 else

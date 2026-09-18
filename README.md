@@ -15,7 +15,10 @@ Repository решает две отдельные задачи:
 
 ```text
 shared-infrastructure
-├── Ollama
+├── shared-vlm (vLLM, profile ai-vlm)
+├── shared-embedding (vLLM, profile ai-embedding)
+├── Open WebUI (profile ai-ui)
+├── Ollama (transitional)
 ├── n8n
 │   └── n8n-db (private PostgreSQL только для n8n)
 └── RabbitMQ
@@ -101,7 +104,7 @@ docker --version
 docker compose version
 ```
 
-Для Ollama на NVIDIA GPU:
+Для GPU AI-services:
 
 ```bash
 nvidia-smi
@@ -150,12 +153,20 @@ cd shared-infrastructure
 
 `.env` — private sparse override.
 
-Для текущего shared stack обычно достаточно:
+Для базового shared stack обычно достаточно:
 
 ```dotenv
 N8N_DB_PASSWORD=<strong-password>
 N8N_ENCRYPTION_KEY=<generated-key>
 RABBITMQ_DEFAULT_PASS=<strong-password>
+```
+
+При включении AI profiles также нужны соответствующие secrets, например:
+
+```dotenv
+SHARED_VLM_API_KEY=<strong-api-key>
+SHARED_EMBEDDING_API_KEY=<strong-api-key>
+OPEN_WEBUI_SECRET_KEY=<generated-key>
 ```
 
 Non-secret values **не нужно копировать** из `.env.example`.
@@ -203,31 +214,34 @@ ${SECRET:?message}
 
 ## 5. Host binding
 
-Безопасный default:
+Shared API/UI services предназначены для доступа из trusted LAN/VPN и имеют
+отдельные configurable bind variables:
 
 ```text
-127.0.0.1
-```
-
-Для текущего stack используются отдельные variables:
-
-```text
+SHARED_VLM_BIND_IP
+SHARED_EMBEDDING_BIND_IP
+OPEN_WEBUI_BIND_IP
 SHARED_BIND_IP
 N8N_BIND_IP
 RABBITMQ_BIND_IP
 ```
 
-Если конкретный service должен быть доступен из LAN, переопределить только
-нужный variable в `.env`.
+Baseline для shared API/UI:
 
-Например:
-
-```dotenv
-SHARED_BIND_IP=192.168.10.150
+```text
+0.0.0.0
 ```
 
-`0.0.0.0` публикует service на всех host interfaces и должен использоваться
-только осознанно.
+Это публикует service на всех host interfaces, поэтому host firewall MUST
+ограничивать доступ разрешёнными LAN/VPN source networks.
+
+При необходимости конкретный deployment может привязать service только к LAN IP:
+
+```dotenv
+SHARED_VLM_BIND_IP=192.168.55.167
+```
+
+Infrastructure-private dependencies, например `n8n-db`, наружу не публикуются.
 
 ---
 
@@ -262,6 +276,14 @@ docker compose ps
 ./scripts/check.sh
 ```
 
+AI services включаются profiles через `.env`, например:
+
+```dotenv
+COMPOSE_PROFILES=ai-vlm,ai-embedding,ai-ui
+```
+
+или явно через `--profile` в Compose command.
+
 ---
 
 ## 7. Shared network
@@ -285,27 +307,41 @@ Project PostgreSQL обычно остаётся только в private project
 
 ---
 
-## 8. Ollama
+## 8. Shared AI inference
 
-Container-to-container URL:
+Container-to-container URLs через `ai-shared`:
+
+```text
+VLM:       http://shared-vlm:8000/v1
+Embedding: http://shared-embedding:8000
+Open WebUI:http://open-webui:8080
+```
+
+Logical model names:
+
+```text
+shared-vlm
+shared-embedding
+```
+
+С другого компьютера или сервера используются published host endpoints:
+
+```text
+http://<shared-host>:8000/v1
+http://<shared-host>:8001
+http://<shared-host>:3000
+```
+
+Physical model ID, GPU devices, Tensor Parallel, context и concurrency задаются
+через `.env` и не должны hardcode-иться в application projects.
+
+Ollama сохраняется как transitional runtime для существующих consumers:
 
 ```text
 http://ollama:11434
 ```
 
-Application configuration:
-
-```dotenv
-OLLAMA_BASE_URL=http://ollama:11434
-```
-
-Проверка host:
-
-```bash
-curl -fsS http://127.0.0.1:${OLLAMA_HOST_PORT:-11434}/api/tags
-```
-
-Проверка models:
+Проверка Ollama models:
 
 ```bash
 docker compose exec ollama ollama list
@@ -451,7 +487,10 @@ docker compose down -v
 
 `-v` может удалить persistent data:
 
+- Hugging Face model cache;
+- vLLM cache;
 - Ollama models;
+- Open WebUI data;
 - n8n data;
 - n8n database;
 - RabbitMQ data.
@@ -471,6 +510,19 @@ docker compose pull
 docker compose up -d
 docker compose ps
 ./scripts/check.sh
+```
+
+После изменения `.env` обычный `docker compose restart` не применяет большинство
+изменённых environment variables. Нужен recreate:
+
+```bash
+docker compose up -d --force-recreate
+```
+
+Для отдельного AI service:
+
+```bash
+docker compose --profile ai-vlm up -d --force-recreate shared-vlm
 ```
 
 Не менять production-like image tags на `latest` без причины.
@@ -502,6 +554,24 @@ docker compose ps
 ---
 
 ## 16. Диагностика
+
+shared-vlm:
+
+```bash
+docker compose logs --tail=100 shared-vlm
+```
+
+shared-embedding:
+
+```bash
+docker compose logs --tail=100 shared-embedding
+```
+
+Open WebUI:
+
+```bash
+docker compose logs --tail=100 open-webui
+```
 
 Ollama:
 
@@ -588,10 +658,13 @@ scripts/
           │                     │
   shared-infrastructure      applications
           │                     │
-     ┌────┼─────┐        ┌──────┼────────┐
-   Ollama n8n RabbitMQ   API frontend workers
-     │     │      │        │
-     └─────┴──────┴── ai-shared
+  ┌───────┼────────┐      ┌─────┼────────┐
+shared-vlm      shared-    API frontend workers
+shared-embedding services   │
+Open WebUI        │          │
+Ollama / n8n / RabbitMQ     │
+          │                 │
+          └──────────── ai-shared
                            │
                     private project net
                            │
@@ -601,8 +674,9 @@ scripts/
 ```text
 Share infrastructure.
 Isolate application state.
-Use Docker DNS.
+Use Docker DNS on the same host.
+Use published shared endpoints from trusted LAN/VPN.
+Keep physical model/GPU placement in deployment configuration.
 Keep .env sparse.
-Do not expose ports unnecessarily.
 Verify runtime instead of assuming it.
 ```
