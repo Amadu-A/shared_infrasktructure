@@ -1,111 +1,60 @@
 # Shared Services Registry
 
-Этот файл — человекочитаемый реестр общей инфраструктуры.
+Краткий человекочитаемый реестр. Machine-readable source of truth:
+`docs/services.yaml`.
 
-> Важно: реестр описывает **предполагаемую топологию**. Фактическое состояние
-> всегда подтверждается `docker compose ps`, `docker ps` и health-check командами.
+| Service | Docker DNS / internal | Published host port | Lifecycle |
+|---|---|---:|---|
+| `shared-vlm` | `http://shared-vlm:8000/v1` | `8000` | shared, profile `ai-vlm` |
+| `shared-embedding` | `http://shared-embedding:8000` | `8001` | shared, profile `ai-embedding` |
+| `open-webui` | `http://open-webui:8080` | `3000` | shared optional, profile `ai-ui` |
+| `ollama` | `http://ollama:11434` | `11434` | shared transitional |
+| `n8n` | `http://n8n:5678` | `5678` | shared |
+| `rabbitmq` | `rabbitmq:5672` | `5672` | shared |
+| RabbitMQ Management | — | `15672` | shared admin UI |
+| `n8n-db` | `n8n-db:5432` | не публикуется | infrastructure-private |
 
-## Сервисы
+## Правило доступа
 
-| Сервис | Назначение | Docker DNS | Внутренний endpoint | Host port по умолчанию | Доступ проектам |
-|---|---|---|---|---:|---|
-| Ollama | Общий LLM/VLM runtime на NVIDIA GPU | `ollama` | `http://ollama:11434` | `11434` | Да, через `ai-shared` |
-| n8n | Общая orchestration-платформа | `n8n` | `http://n8n:5678` | `5678` | Да, через `ai-shared` |
-| RabbitMQ | Общий message broker | `rabbitmq` | `rabbitmq:5672` | `5672` | Да, через `ai-shared` |
-| RabbitMQ Management | Администрирование RabbitMQ | — | — | `15672` | Только администраторам |
-| n8n-db | PostgreSQL только для n8n | `n8n-db` | `n8n-db:5432` | не публикуется | Нет |
+На том же Docker host application SHOULD использовать `ai-shared` и Docker DNS.
 
-## Не управляются этим репозиторием по умолчанию
-
-Эти сервисы обычно принадлежат конкретному приложению:
-
-- PostgreSQL приложения;
-- Qdrant приложения;
-- Redis приложения;
-- Celery worker / Celery beat;
-- backend;
-- frontend.
-
-## Shared network
+С другого компьютера или application server использовать:
 
 ```text
-ai-shared
+http://<shared-host>:8000/v1
+http://<shared-host>:8001
+http://<shared-host>:3000
+http://<shared-host>:5678
+http://<shared-host>:15672
+<shared-host>:5672
 ```
 
-Приложение подключается к этой сети только тем контейнером, которому
-действительно нужны shared-сервисы.
+Bind IP и host ports configurable через `.env`.
 
-Например backend может быть подключён одновременно к:
+Published shared services предназначены для trusted LAN/VPN и MUST быть
+ограничены host firewall.
+
+## AI ownership
+
+Physical model, GPU list, TP и runtime limits принадлежат
+`shared-infrastructure`, а не business project.
+
+Business projects используют logical contracts:
 
 ```text
-project-default
-ai-shared
+shared-vlm
+shared-embedding
 ```
 
-а PostgreSQL проекта должен оставаться только в private network проекта.
+и не поднимают собственную копию общей модели без документированной причины.
 
 ## Проверка
 
-Из директории репозитория:
-
 ```bash
 docker compose ps
-```
-
-Все контейнеры сервера:
-
-```bash
-docker ps \
-  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-```
-
-Ollama:
-
-```bash
-curl -fsS http://127.0.0.1:${OLLAMA_HOST_PORT:-11434}/api/tags
-```
-
-n8n:
-
-```bash
-curl -fsS http://127.0.0.1:${N8N_HOST_PORT:-5678}/healthz
-```
-
-RabbitMQ:
-
-```bash
-docker compose exec rabbitmq rabbitmq-diagnostics -q ping
-```
-
-GPU:
-
-```bash
+./scripts/check.sh
 nvidia-smi
 ```
 
-## Ownership
-
-Shared-сервис не должен принадлежать одному бизнес-проекту.
-
-Запрещённая зависимость:
-
-```text
-PDRD compose
-└── Ollama
-
-Contract AI
-└── использует Ollama, принадлежащий PDRD
-```
-
-Правильная схема:
-
-```text
-shared-infrastructure
-├── Ollama
-├── n8n
-└── RabbitMQ
-
-PDRD
-Contract AI
-Other projects
-```
+Runtime state всегда проверяется отдельно: этот registry описывает intended
+topology, а не доказывает, что container сейчас запущен.

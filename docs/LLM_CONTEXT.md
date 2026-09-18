@@ -215,16 +215,18 @@ LLM MUST NOT утверждать, что сервис запущен, толь�
 
 ## 8. Shared service endpoints
 
-После подтверждения работы shared stack и подключения application container
-к `ai-shared` использовать Docker DNS.
+После подтверждения работы shared stack application SHOULD использовать один из
+двух способов доступа.
 
-Основные shared services:
+### Container-to-container на том же Docker host
+
+Application container подключается к `ai-shared` и использует Docker DNS:
 
 ```text
-VLM:       http://shared-vlm:8000/v1
-Embedding: http://shared-embedding:8000/v1
-n8n:       http://n8n:5678
-RabbitMQ:  rabbitmq:5672
+VLM:        http://shared-vlm:8000/v1
+Embedding:  http://shared-embedding:8000
+n8n:        http://n8n:5678
+RabbitMQ:   rabbitmq:5672
 ```
 
 Transitional runtime:
@@ -233,8 +235,29 @@ Transitional runtime:
 Ollama: http://ollama:11434
 ```
 
-Ollama используется только существующими consumers, которые ещё не мигрировали
-на shared vLLM.
+### Доступ с другого компьютера или сервера
+
+Shared API/UI services публикуют configurable host ports и предназначены для
+доступа из доверенных LAN/VPN сетей.
+
+Использовать:
+
+```text
+VLM:         http://<shared-host>:8000/v1
+Embedding:   http://<shared-host>:8001
+Open WebUI:  http://<shared-host>:3000
+n8n:         http://<shared-host>:5678
+RabbitMQ:    <shared-host>:5672
+RabbitMQ UI: http://<shared-host>:15672
+Ollama:      http://<shared-host>:11434
+```
+
+Конкретные bind IP и host ports определяются deployment configuration и
+`services.yaml`.
+
+Host-published shared services MUST быть ограничены firewall правилами для
+разрешённых LAN/VPN source networks. Нельзя считать application-level API key
+заменой host firewall.
 
 Если проекту требуется LLM, VLM или embedding, LLM MUST сначала проверить
 `services.yaml` и переиспользовать существующий shared endpoint.
@@ -254,7 +277,7 @@ model server
 Business project MUST зависеть от logical service/model identity, а не от
 физической GPU topology.
 
-Например:
+Пример для application container на том же host:
 
 ```dotenv
 SHARED_VLM_BASE_URL=http://shared-vlm:8000/v1
@@ -264,10 +287,18 @@ SHARED_EMBEDDING_BASE_URL=http://shared-embedding:8000/v1
 SHARED_EMBEDDING_MODEL=shared-embedding
 ```
 
+Пример для application на другом host:
+
+```dotenv
+SHARED_VLM_BASE_URL=http://<shared-host>:8000/v1
+SHARED_VLM_MODEL=shared-vlm
+
+SHARED_EMBEDDING_BASE_URL=http://<shared-host>:8001/v1
+SHARED_EMBEDDING_MODEL=shared-embedding
+```
+
 Physical model ID, GPU placement, Tensor Parallel, model context и concurrency
 являются deployment configuration shared infrastructure.
-
-Не использовать host ports для container-to-container communication.
 
 Внутри Docker `localhost` означает текущий container.
 
