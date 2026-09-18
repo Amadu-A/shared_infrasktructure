@@ -79,9 +79,12 @@ PROJECT SERVICES
 Типичные shared services:
 
 ```text
-Ollama
+vLLM shared-vlm
+vLLM shared-embedding
+Ollama — transitional
 RabbitMQ
 n8n
+Open WebUI — optional human UI
 reverse proxy
 Prometheus
 Grafana
@@ -166,52 +169,208 @@ Shared infrastructure MUST храниться отдельно от business pro
 
 ---
 
-## 6. Ollama
+## 6. Shared AI inference
 
-Ollama SHOULD быть единым shared service на одном GPU host, если нет
-документированной причины изолировать runtime.
+AI inference является shared infrastructure.
 
-Не создавать без необходимости:
-
-```text
-project-a-ollama
-project-b-ollama
-project-c-ollama
-```
-
-Причины:
-
-- duplicate models на диске;
-- конкуренция за VRAM;
-- сложнее ограничивать parallelism;
-- сложнее обновлять runtime;
-- lifecycle одного приложения начинает влиять на другие.
-
-Правильная схема:
+Целевая схема:
 
 ```text
-               shared Ollama
-                     │
-        ┌────────────┼────────────┐
-        │            │            │
-    Project A    Project B    Project C
+Application projects
+        │
+        ├──────────────> shared-vlm
+        │                    │
+        │                   vLLM
+        │
+        └──────────────> shared-embedding
+                             │
+                            vLLM
 ```
 
-Application URL передавать через configuration:
+Application project MUST NOT поднимать собственный Ollama/vLLM или копию общей
+модели, если подходящий shared endpoint уже существует.
 
-```dotenv
-OLLAMA_BASE_URL=http://ollama:11434
-```
+### 6.1. Stable contracts
 
-Hardcoded infrastructure URL запрещён.
-
-Неправильно внутри container:
+Проекты должны использовать logical endpoints:
 
 ```text
-http://localhost:11434
+http://shared-vlm:8000/v1
+http://shared-embedding:8000/v1
 ```
 
-если Ollama работает в другом container.
+и logical model names:
+
+```text
+shared-vlm
+shared-embedding
+```
+
+Business application MUST NOT знать:
+
+```text
+GPU index;
+количество GPU;
+Tensor Parallel size;
+число replicas;
+HuggingFace physical model ID;
+физическую GPU topology.
+```
+
+### 6.2. Deployment configuration
+
+Следующие параметры являются configuration shared infrastructure:
+
+```text
+physical model ID;
+model alias;
+GPU devices;
+Tensor Parallel size;
+context limit;
+GPU memory utilization;
+concurrency limits;
+queue limits.
+```
+
+Они MUST задаваться через deployment configuration / environment variables,
+а не hardcode внутри business projects.
+
+Один и тот же shared Compose должен поддерживать разные GPU hosts.
+
+Например single-GPU development server и multi-GPU production server используют
+одни logical endpoints, но могут использовать разные physical models и runtime
+limits.
+
+Resource capacity конкретного host является ответственностью deployment
+operator, а не application architecture.
+
+### 6.3. GPU placement
+
+Inference service MUST получать явный набор доступных GPU через deployment
+configuration.
+
+Для multi-GPU Tensor Parallel перед deployment MUST быть проверена фактическая
+GPU topology.
+
+Нельзя выбирать GPU для TP только по принципу "любые свободные карты".
+
+Если модель помещается на одной GPU, TP=1 является обязательным baseline для
+benchmark.
+
+Окончательный выбор между single-GPU, Tensor Parallel и несколькими replicas
+принимается по benchmark, а не по предположению.
+
+### 6.4. Model residency
+
+Production shared models SHOULD оставаться resident в GPU VRAM на протяжении
+lifecycle inference service.
+
+Обычная production request path не должна выглядеть как:
+
+```text
+load model
+-> inference
+-> unload model
+```
+
+Для development/operator работы MAY запускаться только нужный inference service.
+
+### 6.5. Concurrency и очереди
+
+vLLM отвечает за:
+
+```text
+concurrent inference;
+continuous batching;
+short-lived inference scheduling;
+bounded admission/backpressure.
+```
+
+RabbitMQ отвечает за:
+
+```text
+durable background jobs;
+batch processing;
+indexing;
+retry;
+workload smoothing.
+```
+
+Interactive request SHOULD идти непосредственно к shared inference endpoint.
+
+Batch workload SHOULD использовать:
+
+```text
+RabbitMQ
+-> bounded project worker
+-> shared inference endpoint
+```
+
+### 6.6. Shared embedding
+
+`shared-embedding` является общей embedding infrastructure.
+
+Замена существующей embedding model/provider MUST учитывать compatibility
+существующих vector indexes.
+
+Нельзя silently менять:
+
+```text
+embedding model;
+vector dimension;
+preprocessing;
+normalization.
+```
+
+Если vectors несовместимы, project выполняет controlled reindex/migration.
+
+### 6.7. Open WebUI
+
+Open WebUI MAY быть shared human-facing UI для:
+
+```text
+ручного общения с моделями;
+prompt testing;
+vision testing;
+developer testing.
+```
+
+Он MUST NOT быть обязательной dependency business applications.
+
+Open WebUI не является source of truth для vLLM model lifecycle.
+
+Start/stop/restart inference и model cache administration выполняются shared
+Compose/scripts.
+
+### 6.8. Ollama transition
+
+Ollama является transitional shared service.
+
+Во время migration допустимо:
+
+```text
+existing consumers -> Ollama
+new/migrated consumers -> shared-vlm
+```
+
+Новые проекты SHOULD использовать `shared-vlm`, если нет документированной
+причины использовать Ollama.
+
+Ollama удаляется только после проверки, что active consumers больше от него
+не зависят.
+
+### 6.9. Что сейчас не добавляется
+
+Без отдельного архитектурного решения MUST NOT добавляться:
+
+```text
+Ray Serve;
+Kubernetes / k3s;
+GPU Operator;
+service mesh;
+request-level dynamic model load/unload;
+project-local duplicate shared models.
+```
 
 ---
 
@@ -501,8 +660,8 @@ N8N_BIND_IP
 RABBITMQ_BIND_IP
 ```
 
-Это позволяет, например, открыть Ollama для LAN, но оставить RabbitMQ
-Management только на localhost.
+Это позволяет, например, открыть Open WebUI для LAN, но оставить inference
+workers и RabbitMQ Management только на localhost.
 
 ---
 
@@ -520,6 +679,8 @@ localhost
 Для другого service использовать Docker DNS:
 
 ```text
+http://shared-vlm:8000/v1
+http://shared-embedding:8000/v1
 http://ollama:11434
 http://n8n:5678
 rabbitmq:5672
@@ -629,7 +790,10 @@ Infrastructure addresses MUST передаваться через configuration.
 Пример:
 
 ```dotenv
-OLLAMA_BASE_URL=http://ollama:11434
+SHARED_VLM_BASE_URL=http://shared-vlm:8000/v1
+SHARED_VLM_MODEL=shared-vlm
+SHARED_EMBEDDING_BASE_URL=http://shared-embedding:8000/v1
+SHARED_EMBEDDING_MODEL=shared-embedding
 QDRANT_URL=http://qdrant:6333
 DATABASE_URL=postgresql://...
 RABBITMQ_URL=amqp://...
@@ -838,7 +1002,7 @@ depends_on:
 - как проверяется health;
 - как изолируются credentials/data.
 
-Нельзя автоматически добавлять Ollama, RabbitMQ, n8n, Redis, Qdrant или
+Нельзя автоматически добавлять vLLM, Ollama, RabbitMQ, n8n, Redis, Qdrant или
 PostgreSQL, не проверив существующую инфраструктуру и project requirements.
 
 ---
@@ -900,16 +1064,26 @@ docker ps -a
 
 ## 35. Проверка shared services
 
-### Ollama
-
-```bash
-curl -fsS http://127.0.0.1:11434/api/tags
-```
+### shared-vlm
 
 Из container в `ai-shared`:
 
 ```bash
-curl -fsS http://ollama:11434/api/tags
+curl -fsS http://shared-vlm:8000/health
+```
+
+### shared-embedding
+
+Из container в `ai-shared`:
+
+```bash
+curl -fsS http://shared-embedding:8000/health
+```
+
+### Ollama — transitional
+
+```bash
+curl -fsS http://127.0.0.1:11434/api/tags
 ```
 
 ### n8n
@@ -963,7 +1137,9 @@ curl -fsS http://127.0.0.1:6333/
 
 LLM MUST NOT автоматически:
 
+- добавлять project-local vLLM;
 - добавлять второй Ollama;
+- дублировать shared VLM или shared embedding model;
 - добавлять второй shared RabbitMQ;
 - добавлять второй shared n8n;
 - делать PostgreSQL shared без решения;
@@ -1082,10 +1258,9 @@ prod
 Перед добавлением проекта ответить:
 
 ```text
-[ ] Требуется GPU?
-[ ] Какая модель?
-[ ] Какой ожидаемый VRAM/context/parallelism?
-[ ] Требуется Ollama?
+[ ] Требуется shared-vlm?
+[ ] Требуется shared-embedding?
+[ ] Требуется transitional Ollama?
 [ ] Требуется RabbitMQ?
 [ ] Требуется Celery?
 [ ] Требуется n8n?
@@ -1105,6 +1280,17 @@ prod
 [ ] Какие secrets требуются?
 [ ] .env.example содержит полный catalog?
 [ ] .env остаётся sparse?
+```
+
+Для владельца shared inference deployment дополнительно:
+
+```text
+[ ] Какая physical model загружается?
+[ ] Какие GPU ей доступны?
+[ ] Какой TP/replica layout выбран?
+[ ] Какой context limit?
+[ ] Какие concurrency/backpressure limits?
+[ ] Проверена ли GPU topology для multi-GPU TP?
 ```
 
 ---
@@ -1138,7 +1324,10 @@ Shared infrastructure SHOULD храниться в отдельном repository
 
 ```text
 shared-infrastructure
-├── Ollama
+├── shared-vlm
+├── shared-embedding
+├── Ollama (transitional)
+├── Open WebUI (optional)
 ├── n8n
 └── RabbitMQ
 
@@ -1154,20 +1343,21 @@ Business project MUST NOT быть владельцем shared service, от к�
 
 ```text
 Project A compose
-└── Ollama
+└── vLLM / Ollama
 
 Project B
-└── depends on Project A Ollama
+└── depends on Project A model runtime
 ```
 
 Правильно:
 
 ```text
-shared-infrastructure compose
-└── Ollama
+shared-infrastructure
+├── shared-vlm
+└── shared-embedding
 
 Project A ─┐
-Project B ─┼──> shared Ollama
+Project B ─┼──> shared inference
 Project C ─┘
 ```
 
@@ -1182,15 +1372,25 @@ Project C ─┘
               │                       │
         SHARED INFRA              PROJECTS
               │                       │
-       ┌──────┼──────┐         ┌──────┼────────┐
-       │      │      │         │      │        │
-    Ollama   n8n  RabbitMQ    API   frontend  workers
-       │             │         │
-       └─────────────┴──── ai-shared
-                              │
-                    project private network
-                              │
-                    PostgreSQL / Qdrant / Redis
+   ┌──────────┼──────────┐      ┌─────┼────────┐
+   │          │          │      │     │        │
+shared-vlm shared-embedding   API frontend  workers
+   │          │                 │
+   └──────────┴────────── ai-shared
+              │                 │
+        n8n / RabbitMQ    project private net
+                                │
+                      PostgreSQL / Qdrant / Redis
+```
+
+Optional human access:
+
+```text
+Developer
+    ↓
+Open WebUI
+    ↓
+shared-vlm
 ```
 
 Главное правило:
@@ -1198,6 +1398,8 @@ Project C ─┘
 ```text
 Share infrastructure.
 Isolate application state.
+Use stable logical inference endpoints.
+Keep physical model/GPU placement in shared deployment configuration.
 Do not expose ports unnecessarily.
 Do not duplicate expensive services.
 Discover runtime before changing infrastructure.
