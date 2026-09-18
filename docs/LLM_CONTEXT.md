@@ -213,20 +213,63 @@ LLM MUST NOT утверждать, что сервис запущен, толь�
 
 ---
 
-## 8. Shared DNS endpoints
+## 8. Shared service endpoints
 
 После подтверждения работы shared stack и подключения application container
-к `ai-shared` использовать Docker DNS:
+к `ai-shared` использовать Docker DNS.
+
+Основные shared services:
 
 ```text
-Ollama:   http://ollama:11434
-n8n:      http://n8n:5678
-RabbitMQ: rabbitmq:5672
+VLM:       http://shared-vlm:8000/v1
+Embedding: http://shared-embedding:8000/v1
+n8n:       http://n8n:5678
+RabbitMQ:  rabbitmq:5672
 ```
+
+Transitional runtime:
+
+```text
+Ollama: http://ollama:11434
+```
+
+Ollama используется только существующими consumers, которые ещё не мигрировали
+на shared vLLM.
+
+Если проекту требуется LLM, VLM или embedding, LLM MUST сначала проверить
+`services.yaml` и переиспользовать существующий shared endpoint.
+
+LLM MUST NOT автоматически добавлять в business project:
+
+```text
+Ollama
+vLLM
+model server
+отдельную копию общей embedding model
+отдельную копию общей VLM
+```
+
+без явно документированной причины.
+
+Business project MUST зависеть от logical service/model identity, а не от
+физической GPU topology.
+
+Например:
+
+```dotenv
+SHARED_VLM_BASE_URL=http://shared-vlm:8000/v1
+SHARED_VLM_MODEL=shared-vlm
+
+SHARED_EMBEDDING_BASE_URL=http://shared-embedding:8000/v1
+SHARED_EMBEDDING_MODEL=shared-embedding
+```
+
+Physical model ID, GPU placement, Tensor Parallel, model context и concurrency
+являются deployment configuration shared infrastructure.
 
 Не использовать host ports для container-to-container communication.
 
-Внутри Docker `localhost` означает текущий контейнер.
+Внутри Docker `localhost` означает текущий container.
 
 ---
 
