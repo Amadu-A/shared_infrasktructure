@@ -1,6 +1,6 @@
 # docs/services.yaml
 
-schema_version: 2
+schema_version: 3
 
 bundle:
   entrypoint: docs/LLM_CONTEXT.md
@@ -24,13 +24,13 @@ networks:
 
 ai_inference:
   target_runtime: vllm
-  transitional_runtime: ollama
 
   principles:
     hardware_portable: true
     stable_logical_endpoints: true
     physical_models_from_environment: true
     gpu_placement_from_environment: true
+    parallelism_from_environment: true
     resident_production_models: true
     topology_check_required_for_multi_gpu_tp: true
     request_level_model_load_unload: false
@@ -53,13 +53,15 @@ ai_inference:
 
 host_access_policy:
   shared_api_ui_published: true
+  public_host_environment_variable: SHARED_PUBLIC_HOST
   default_bind_ip: 0.0.0.0
   intended_scope: trusted LAN and VPN
   firewall_source_restriction_required: true
 
   notes:
-    - Shared application APIs, user UIs and administration UIs have configurable published host ports.
-    - Application containers on the same host should still use Docker DNS over ai-shared.
+    - SHARED_PUBLIC_HOST is the IP or DNS name advertised to clients on other hosts.
+    - Bind IP and public host are different settings.
+    - Application containers on the same host should use Docker DNS over ai-shared.
     - Infrastructure-private dependencies should not publish host ports.
     - Application-level API keys are additional protection and do not replace host firewall rules.
 
@@ -74,7 +76,6 @@ services:
 
     docker_dns_name: shared-vlm
     network: ai-shared
-
     protocol: http
 
     internal_access:
@@ -83,10 +84,11 @@ services:
 
     host_access:
       published: true
+      public_host_environment_variable: SHARED_PUBLIC_HOST
       bind_ip_environment_variable: SHARED_VLM_BIND_IP
       host_port_environment_variable: SHARED_VLM_HOST_PORT
       default_host_port: 8000
-      url_template: http://<shared-host>:8000/v1
+      url_template: http://<SHARED_PUBLIC_HOST>:8000/v1
       intended_scope: LAN and VPN
       firewall_restricted: true
 
@@ -94,7 +96,6 @@ services:
       type: bearer_api_key
       environment_variable: SHARED_VLM_API_KEY
       notes:
-        - vLLM API key does not protect every server endpoint.
         - Firewall protection remains mandatory.
 
     endpoints:
@@ -107,6 +108,7 @@ services:
       logical_name: shared-vlm
       physical_model_source: environment
       model_id_environment_variable: SHARED_VLM_MODEL_ID
+      revision_environment_variable: SHARED_VLM_MODEL_REVISION
       alias_environment_variable: SHARED_VLM_MODEL_ALIAS
 
     gpu:
@@ -115,12 +117,13 @@ services:
       placement_source: environment
       devices_environment_variable: SHARED_VLM_GPU_DEVICES
       tensor_parallel_environment_variable: SHARED_VLM_TP_SIZE
+      data_parallel_environment_variable: SHARED_VLM_DP_SIZE
       topology_aware_tp_required: true
 
     notes:
       - Application projects should use the logical shared-vlm contract.
       - Projects must not depend on physical model IDs or GPU layout.
-      - Final TP/DP layout is selected by benchmark.
+      - Final TP/DP layout is deployment configuration selected by benchmark.
 
   shared-embedding:
     managed_here: true
@@ -132,7 +135,6 @@ services:
 
     docker_dns_name: shared-embedding
     network: ai-shared
-
     protocol: http
 
     internal_access:
@@ -141,10 +143,11 @@ services:
 
     host_access:
       published: true
+      public_host_environment_variable: SHARED_PUBLIC_HOST
       bind_ip_environment_variable: SHARED_EMBEDDING_BIND_IP
       host_port_environment_variable: SHARED_EMBEDDING_HOST_PORT
       default_host_port: 8001
-      url_template: http://<shared-host>:8001
+      url_template: http://<SHARED_PUBLIC_HOST>:8001
       intended_scope: LAN and VPN
       firewall_restricted: true
 
@@ -165,6 +168,7 @@ services:
       logical_name: shared-embedding
       physical_model_source: environment
       model_id_environment_variable: SHARED_EMBEDDING_MODEL_ID
+      revision_environment_variable: SHARED_EMBEDDING_MODEL_REVISION
       alias_environment_variable: SHARED_EMBEDDING_MODEL_ALIAS
 
     gpu:
@@ -173,6 +177,7 @@ services:
       placement_source: environment
       devices_environment_variable: SHARED_EMBEDDING_GPU_DEVICES
       tensor_parallel_environment_variable: SHARED_EMBEDDING_TP_SIZE
+      data_parallel_environment_variable: SHARED_EMBEDDING_DP_SIZE
       topology_aware_tp_required: true
 
     compatibility:
@@ -191,7 +196,6 @@ services:
 
     docker_dns_name: open-webui
     network: ai-shared
-
     protocol: http
 
     internal_access:
@@ -199,10 +203,11 @@ services:
 
     host_access:
       published: true
+      public_host_environment_variable: SHARED_PUBLIC_HOST
       bind_ip_environment_variable: OPEN_WEBUI_BIND_IP
       host_port_environment_variable: OPEN_WEBUI_HOST_PORT
       default_host_port: 3000
-      url_template: http://<shared-host>:3000
+      url_template: http://<SHARED_PUBLIC_HOST>:3000
       intended_scope: LAN and VPN
       firewall_restricted: true
 
@@ -217,41 +222,6 @@ services:
       - Open WebUI does not own vLLM model lifecycle.
       - Infrastructure connection settings are managed through Compose and env.
 
-  ollama:
-    managed_here: true
-    lifecycle: shared-transitional
-    runtime: ollama
-
-    compose_service: ollama
-    docker_dns_name: ollama
-    network: ai-shared
-
-    protocol: http
-
-    internal_access:
-      url: http://ollama:11434
-
-    host_access:
-      published: true
-      bind_ip_environment_variable: SHARED_BIND_IP
-      host_port_environment_variable: OLLAMA_HOST_PORT
-      default_host_port: 11434
-      url_template: http://<shared-host>:11434
-      intended_scope: LAN and VPN
-      firewall_restricted: true
-
-    gpu:
-      required: true
-      vendor: nvidia
-      placement_source: environment
-      devices_environment_variable: OLLAMA_GPU_DEVICES
-
-    notes:
-      - Existing consumers may continue using Ollama during migration.
-      - New projects should prefer shared-vlm unless an exception is documented.
-      - Ollama has no shared-stack API key layer here, so firewall restrictions are mandatory.
-      - Ollama is removed only after all active consumers have migrated.
-
   n8n:
     managed_here: true
     lifecycle: shared
@@ -259,7 +229,6 @@ services:
     compose_service: n8n
     docker_dns_name: n8n
     network: ai-shared
-
     protocol: http
 
     internal_access:
@@ -267,10 +236,11 @@ services:
 
     host_access:
       published: true
+      public_host_environment_variable: SHARED_PUBLIC_HOST
       bind_ip_environment_variable: N8N_BIND_IP
       host_port_environment_variable: N8N_HOST_PORT
       default_host_port: 5678
-      url_template: http://<shared-host>:5678
+      url_template: http://<SHARED_PUBLIC_HOST>:5678
       intended_scope: LAN and VPN
       firewall_restricted: true
 
@@ -288,7 +258,6 @@ services:
     compose_service: rabbitmq
     docker_dns_name: rabbitmq
     network: ai-shared
-
     protocol: amqp
 
     internal_access:
@@ -296,13 +265,14 @@ services:
 
     host_access:
       published: true
+      public_host_environment_variable: SHARED_PUBLIC_HOST
       bind_ip_environment_variable: RABBITMQ_BIND_IP
       amqp_port_environment_variable: RABBITMQ_AMQP_HOST_PORT
       management_port_environment_variable: RABBITMQ_MANAGEMENT_HOST_PORT
       default_amqp_host_port: 5672
       default_management_host_port: 15672
-      amqp_endpoint_template: <shared-host>:5672
-      management_url_template: http://<shared-host>:15672
+      amqp_endpoint_template: <SHARED_PUBLIC_HOST>:5672
+      management_url_template: http://<SHARED_PUBLIC_HOST>:15672
       intended_scope: LAN and VPN
       firewall_restricted: true
 
@@ -319,7 +289,6 @@ services:
 
     compose_service: n8n-db
     network: n8n-internal
-
     internal_endpoint: n8n-db:5432
     host_port_published: false
     exposed_to_application_projects: false
@@ -355,7 +324,6 @@ defaults_for_other_services:
 
 runtime_verification:
   required: true
-
   commands:
     - docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
     - docker network ls
@@ -372,9 +340,9 @@ llm_rules:
   - Reuse services with managed_here=true unless an exception is documented.
   - Use shared-vlm for shared generation and VLM workloads.
   - Use shared-embedding for compatible shared embedding workloads.
-  - Do not create project-local Ollama or vLLM when a suitable shared service exists.
-  - Physical model IDs, GPU placement and TP settings belong to shared deployment configuration.
+  - Do not create project-local vLLM when a suitable shared service exists.
+  - Physical model IDs/revisions, GPU placement, TP and DP settings belong to shared deployment configuration.
   - Use Docker DNS and internal ports for container-to-container traffic on the same host.
-  - Use published host endpoints for approved LAN/VPN clients on other hosts.
+  - Use SHARED_PUBLIC_HOST plus published host ports for approved LAN/VPN clients on other hosts.
   - Use RabbitMQ plus bounded project workers for durable AI batch workloads.
   - Verify runtime state; this registry describes intended topology, not proof that a service is running.

@@ -12,6 +12,7 @@ fi
 
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-shared}"
 NETWORK_NAME="${SHARED_NETWORK_NAME:-ai-shared}"
+PUBLIC_HOST="${SHARED_PUBLIC_HOST:-<not-configured>}"
 
 SHARED_VLM_BIND_IP="${SHARED_VLM_BIND_IP:-0.0.0.0}"
 SHARED_VLM_HOST_PORT="${SHARED_VLM_HOST_PORT:-8000}"
@@ -21,9 +22,6 @@ SHARED_EMBEDDING_HOST_PORT="${SHARED_EMBEDDING_HOST_PORT:-8001}"
 
 OPEN_WEBUI_BIND_IP="${OPEN_WEBUI_BIND_IP:-0.0.0.0}"
 OPEN_WEBUI_HOST_PORT="${OPEN_WEBUI_HOST_PORT:-3000}"
-
-SHARED_BIND_IP="${SHARED_BIND_IP:-0.0.0.0}"
-OLLAMA_HOST_PORT="${OLLAMA_HOST_PORT:-11434}"
 
 N8N_BIND_IP="${N8N_BIND_IP:-0.0.0.0}"
 N8N_HOST_PORT="${N8N_HOST_PORT:-5678}"
@@ -51,17 +49,6 @@ check_ip() {
   case "$1" in
     0.0.0.0|"::"|"[::]")
       printf '127.0.0.1'
-      ;;
-    *)
-      printf '%s' "$1"
-      ;;
-  esac
-}
-
-display_host() {
-  case "$1" in
-    0.0.0.0|"::"|"[::]")
-      printf '<host-ip>'
       ;;
     *)
       printf '%s' "$1"
@@ -123,26 +110,9 @@ else
 fi
 
 echo
-echo "=== Ollama ==="
-
-if service_running "ollama"; then
-  ollama_check_ip="$(check_ip "${SHARED_BIND_IP}")"
-
-  if curl -fsS \
-    "http://${ollama_check_ip}:${OLLAMA_HOST_PORT}/api/tags" \
-    >/dev/null 2>&1; then
-    ok "Ollama HTTP"
-  else
-    bad "Ollama HTTP"
-  fi
-else
-  bad "Ollama container is not running"
-fi
-
-echo
 echo "=== shared-vlm ==="
 
-if service_running "shared-vlm"; then
+if service_running shared-vlm; then
   vlm_check_ip="$(check_ip "${SHARED_VLM_BIND_IP}")"
 
   if curl -fsS \
@@ -161,6 +131,14 @@ if service_running "shared-vlm"; then
   else
     bad "shared-vlm authenticated API"
   fi
+
+  if curl -fsS \
+    "http://${vlm_check_ip}:${SHARED_VLM_HOST_PORT}/metrics" \
+    >/dev/null 2>&1; then
+    ok "shared-vlm metrics"
+  else
+    bad "shared-vlm metrics"
+  fi
 else
   skip "shared-vlm is not running"
 fi
@@ -168,7 +146,7 @@ fi
 echo
 echo "=== shared-embedding ==="
 
-if service_running "shared-embedding"; then
+if service_running shared-embedding; then
   embedding_check_ip="$(check_ip "${SHARED_EMBEDDING_BIND_IP}")"
 
   if curl -fsS \
@@ -187,6 +165,14 @@ if service_running "shared-embedding"; then
   else
     bad "shared-embedding authenticated API"
   fi
+
+  if curl -fsS \
+    "http://${embedding_check_ip}:${SHARED_EMBEDDING_HOST_PORT}/metrics" \
+    >/dev/null 2>&1; then
+    ok "shared-embedding metrics"
+  else
+    bad "shared-embedding metrics"
+  fi
 else
   skip "shared-embedding is not running"
 fi
@@ -194,7 +180,7 @@ fi
 echo
 echo "=== Open WebUI ==="
 
-if service_running "open-webui"; then
+if service_running open-webui; then
   webui_check_ip="$(check_ip "${OPEN_WEBUI_BIND_IP}")"
 
   if curl -fsS \
@@ -211,7 +197,7 @@ fi
 echo
 echo "=== n8n ==="
 
-if service_running "n8n"; then
+if service_running n8n; then
   n8n_check_ip="$(check_ip "${N8N_BIND_IP}")"
 
   if curl -fsS \
@@ -228,7 +214,7 @@ fi
 echo
 echo "=== n8n-db ==="
 
-if service_running "n8n-db"; then
+if service_running n8n-db; then
   if docker compose exec -T n8n-db \
     pg_isready \
       -U "${N8N_DB_USER:-n8n}" \
@@ -245,7 +231,7 @@ fi
 echo
 echo "=== RabbitMQ ==="
 
-if service_running "rabbitmq"; then
+if service_running rabbitmq; then
   if docker compose exec -T rabbitmq \
     rabbitmq-diagnostics -q ping \
     >/dev/null 2>&1; then
@@ -271,33 +257,12 @@ fi
 echo
 echo "=== Published endpoints ==="
 
-printf 'shared-vlm:       http://%s:%s/v1\n' \
-  "$(display_host "${SHARED_VLM_BIND_IP}")" \
-  "${SHARED_VLM_HOST_PORT}"
-
-printf 'shared-embedding: http://%s:%s\n' \
-  "$(display_host "${SHARED_EMBEDDING_BIND_IP}")" \
-  "${SHARED_EMBEDDING_HOST_PORT}"
-
-printf 'Open WebUI:       http://%s:%s\n' \
-  "$(display_host "${OPEN_WEBUI_BIND_IP}")" \
-  "${OPEN_WEBUI_HOST_PORT}"
-
-printf 'Ollama:           http://%s:%s\n' \
-  "$(display_host "${SHARED_BIND_IP}")" \
-  "${OLLAMA_HOST_PORT}"
-
-printf 'n8n:              http://%s:%s\n' \
-  "$(display_host "${N8N_BIND_IP}")" \
-  "${N8N_HOST_PORT}"
-
-printf 'RabbitMQ AMQP:    %s:%s\n' \
-  "$(display_host "${RABBITMQ_BIND_IP}")" \
-  "${RABBITMQ_AMQP_HOST_PORT}"
-
-printf 'RabbitMQ UI:      http://%s:%s\n' \
-  "$(display_host "${RABBITMQ_BIND_IP}")" \
-  "${RABBITMQ_MANAGEMENT_HOST_PORT}"
+echo "shared-vlm:        http://${PUBLIC_HOST}:${SHARED_VLM_HOST_PORT}/v1"
+echo "shared-embedding:  http://${PUBLIC_HOST}:${SHARED_EMBEDDING_HOST_PORT}"
+echo "Open WebUI:        http://${PUBLIC_HOST}:${OPEN_WEBUI_HOST_PORT}"
+echo "n8n:               http://${PUBLIC_HOST}:${N8N_HOST_PORT}"
+echo "RabbitMQ AMQP:     ${PUBLIC_HOST}:${RABBITMQ_AMQP_HOST_PORT}"
+echo "RabbitMQ UI:       http://${PUBLIC_HOST}:${RABBITMQ_MANAGEMENT_HOST_PORT}"
 
 echo
 
