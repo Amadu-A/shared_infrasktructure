@@ -39,6 +39,12 @@ services:
       - "${SHARED_VLM_MODEL_REVISION:-main}"
       - --served-model-name
       - "${SHARED_VLM_MODEL_ALIAS:-shared-vlm}"
+      - --reasoning-parser
+      - qwen3
+      - --spec-method
+      - mtp
+      - --spec-tokens
+      - "3"
       - --host
       - "0.0.0.0"
       - --port
