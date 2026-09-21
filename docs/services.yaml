@@ -332,17 +332,17 @@ runtime_verification:
     - ./scripts/check.sh
 
 llm_rules:
-  - Start with docs/LLM_CONTEXT.md.
-  - Read docs/ENGINEERING_GUIDELINES.md before planning architecture or generating code.
-  - Read docs/FRONTEND_GUIDELINES.md completely when frontend is affected.
-  - Read docs/INFRASTRUCTURE_INSTRUCTIONS.md before infrastructure changes.
-  - Read this services.yaml before adding infrastructure dependencies.
+  - Start with docs/LLM_CONTEXT.md and follow its task router.
+  - Do not read every guideline automatically; load only the documents required by the task.
+  - Read docs/ENGINEERING_GUIDELINES.md only when backend/application/code rules are relevant.
+  - Read docs/FRONTEND_GUIDELINES.md only when frontend is affected.
+  - Read docs/INFRASTRUCTURE_INSTRUCTIONS.md when infrastructure or shared services are affected.
+  - This services.yaml is required when a shared service is added, changed or consumed.
   - Reuse services with managed_here=true unless an exception is documented.
   - Use shared-vlm for shared generation and VLM workloads.
   - Use shared-embedding for compatible shared embedding workloads.
   - Do not create project-local vLLM when a suitable shared service exists.
   - Physical model IDs/revisions, GPU placement, TP and DP settings belong to shared deployment configuration.
-  - Use Docker DNS and internal ports for container-to-container traffic on the same host.
-  - Use SHARED_PUBLIC_HOST plus published host ports for approved LAN/VPN clients on other hosts.
+  - Use Docker DNS/internal ports on the same host and SHARED_PUBLIC_HOST for approved LAN/VPN clients on other hosts.
   - Use RabbitMQ plus bounded project workers for durable AI batch workloads.
   - Verify runtime state; this registry describes intended topology, not proof that a service is running.
