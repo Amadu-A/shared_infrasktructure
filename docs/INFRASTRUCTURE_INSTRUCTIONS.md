@@ -207,12 +207,43 @@ RabbitMQ:         rabbitmq:5672
 
 Container-to-container traffic SHOULD использовать Docker DNS/internal ports.
 
+Для application configuration на том же Docker host SHOULD использовать stable
+logical values:
+
+```dotenv
+SHARED_VLM_BASE_URL=http://shared-vlm:8000/v1
+SHARED_VLM_MODEL=shared-vlm
+
+SHARED_EMBEDDING_BASE_URL=http://shared-embedding:8000/v1
+SHARED_EMBEDDING_MODEL=shared-embedding
+```
+
+Application MUST NOT подставлять physical Hugging Face model ID вместо
+`shared-vlm` / `shared-embedding`.
+
 ### Другой host
 
 Использовать:
 
 ```text
 SHARED_PUBLIC_HOST + published port
+```
+
+При default published ports application endpoints имеют вид:
+
+```text
+VLM:       http://<SHARED_PUBLIC_HOST>:8000/v1
+Embedding: http://<SHARED_PUBLIC_HOST>:8001/v1
+```
+
+Например для deployment с `SHARED_PUBLIC_HOST=192.168.55.3`:
+
+```dotenv
+SHARED_VLM_BASE_URL=http://192.168.55.3:8000/v1
+SHARED_VLM_MODEL=shared-vlm
+
+SHARED_EMBEDDING_BASE_URL=http://192.168.55.3:8001/v1
+SHARED_EMBEDDING_MODEL=shared-embedding
 ```
 
 Точные ports/contracts брать из:
@@ -222,6 +253,22 @@ docs/services.yaml
 .env.example
 deployment .env
 ```
+
+`shared-vlm` и `shared-embedding` в текущем contract не используют Bearer/API-key
+authentication. Application MUST NOT требовать `SHARED_VLM_API_KEY` или
+`SHARED_EMBEDDING_API_KEY`.
+
+Published inference endpoints доступны только в пределах разрешённой
+trusted LAN/VPN reachability и host firewall rules.
+
+Если конкретный client SDK требует непустой `api_key` только из-за своего
+constructor contract, MAY использовать non-secret literal:
+
+```text
+unused
+```
+
+Такое значение не является credential и не должно превращаться в shared secret.
 
 ### `localhost`
 
@@ -248,6 +295,91 @@ model: shared-vlm
 Embedding:
 http://shared-embedding:8000/v1
 model: shared-embedding
+```
+
+Порядок доступа к shared models:
+
+1. определить, находится client на том же Docker host или на другом approved host;
+2. на том же host подключить только нужный application service к `ai-shared` и
+   использовать Docker DNS;
+3. на другом host использовать `SHARED_PUBLIC_HOST` и published port;
+4. перед inference MAY проверить `/health` и `/v1/models`;
+5. в inference request всегда использовать logical model alias;
+6. не добавлять `Authorization: Bearer ...` для `shared-vlm` или `shared-embedding`;
+7. не зависеть от physical model ID, revision или GPU layout.
+
+Основные VLM endpoints:
+
+```text
+GET  /health
+GET  /v1/models
+POST /v1/chat/completions
+GET  /metrics
+```
+
+На том же Docker host:
+
+```text
+http://shared-vlm:8000/health
+http://shared-vlm:8000/v1/models
+http://shared-vlm:8000/v1/chat/completions
+```
+
+Пример direct VLM request:
+
+```bash
+curl -sS \
+  -H "Content-Type: application/json" \
+  http://shared-vlm:8000/v1/chat/completions \
+  -d '{
+    "model": "shared-vlm",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Ответь только одним словом: РАБОТАЕТ"
+      }
+    ],
+    "max_tokens": 32
+  }'
+```
+
+Основные embedding endpoints:
+
+```text
+GET  /health
+GET  /v1/models
+POST /v1/embeddings
+POST /pooling
+GET  /metrics
+```
+
+На том же Docker host:
+
+```text
+http://shared-embedding:8000/health
+http://shared-embedding:8000/v1/models
+http://shared-embedding:8000/v1/embeddings
+http://shared-embedding:8000/pooling
+```
+
+Пример text embedding request:
+
+```bash
+curl -sS \
+  -H "Content-Type: application/json" \
+  http://shared-embedding:8000/v1/embeddings \
+  -d '{
+    "model": "shared-embedding",
+    "input": "Проверка общей embedding модели"
+  }'
+```
+
+Для clients на другом approved host те же paths используются через published
+URLs:
+
+```text
+http://<SHARED_PUBLIC_HOST>:8000/...
+http://<SHARED_PUBLIC_HOST>:8001/...
 ```
 
 Business project MUST NOT зависеть от:
@@ -314,6 +446,15 @@ normalization;
 multimodal processing semantics.
 ```
 
+Application использует logical alias:
+
+```text
+shared-embedding
+```
+
+но при смене physical embedding model operator MUST отдельно проверить фактическую
+vector dimension и compatibility существующих indexes.
+
 Если существует vector index, смена embedding model/runtime требует compatibility check.
 
 Если vectors несовместимы — выполнить controlled migration/reindex.
@@ -333,6 +474,70 @@ TP_SIZE / DP_SIZE;
 MAX_MODEL_LEN;
 GPU_MEMORY_UTILIZATION;
 concurrency / queue limits.
+```
+
+`MODEL_REVISION` задаёт revision Hugging Face repository, из которой vLLM
+загружает weights/config/tokenizer.
+
+`main` MAY использоваться для первичной оценки модели. Для принятой
+production-like модели SHOULD использоваться exact Hugging Face commit SHA,
+чтобы recreate/rollback был воспроизводимым.
+
+При смене physical VLM model MUST сохраняться logical application contract:
+
+```text
+base URL: http://shared-vlm:8000/v1
+model:    shared-vlm
+```
+
+Утверждённый operational order смены physical VLM model:
+
+1. проверить compatibility модели с текущим vLLM, modality, VRAM и GPU topology;
+2. предварительно скачать выбранный `MODEL_ID` + `MODEL_REVISION` в shared
+   Hugging Face cache;
+3. проверить наличие snapshot и свободное disk space;
+4. изменить deployment `.env`: model ID/revision и при необходимости
+   GPU/TP/DP/context;
+5. выполнить `docker compose config --quiet` и `./scripts/bootstrap.sh`;
+6. только после успешной validation выполнить force-recreate `shared-vlm`;
+7. дождаться `healthy`, проверить logs и `nvidia-smi`;
+8. выполнить `/v1/models`, functional smoke test и `./scripts/check.sh`;
+9. при failure вернуть предыдущие deployment values и выполнить recreate;
+10. не менять application `SHARED_VLM_MODEL=shared-vlm`.
+
+Pre-download SHOULD выполняться до остановки текущего VLM и использовать shared
+Hugging Face persistent cache. Пример:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  run --rm \
+  --no-deps \
+  --entrypoint python3 \
+  shared-vlm \
+  -c 'from huggingface_hub import snapshot_download; snapshot_download("<MODEL_ID>", revision="<MODEL_REVISION>")'
+```
+
+Проверка snapshot:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  run --rm \
+  --no-deps \
+  --entrypoint sh \
+  shared-vlm \
+  -c 'du -sh /root/.cache/huggingface/hub/models--<ORG>--<MODEL>'
+```
+
+После изменения `.env`:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  up -d \
+  --force-recreate \
+  shared-vlm
 ```
 
 Для `TP_SIZE > 1` MUST учитывать actual GPU topology и benchmark.
@@ -504,6 +709,20 @@ environment-specific overrides.
 
 `.env` MUST NOT попадать в Git.
 
+Текущий inference contract не использует:
+
+```text
+SHARED_VLM_API_KEY
+SHARED_EMBEDDING_API_KEY
+```
+
+Business projects MUST NOT добавлять эти variables как обязательные credentials.
+Безопасность published inference endpoints обеспечивается network perimeter,
+trusted LAN/VPN и host firewall.
+
+`HF_TOKEN`, если он нужен для gated/private Hugging Face repository, является
+deployment secret shared infrastructure и MUST NOT передаваться business projects.
+
 После environment/config change нужен recreate:
 
 ```bash
@@ -520,7 +739,12 @@ docker compose up -d --force-recreate <service>
 
 Это НЕ bind address.
 
+`shared-vlm` и `shared-embedding` не требуют application API key/Bearer token.
+
 Published inference endpoints защищаются trusted LAN/VPN и host firewall.
+
+Host firewall MUST ограничивать published inference ports только approved source
+networks/hosts. Отсутствие application API key не означает public Internet access.
 
 Infrastructure-private dependencies SHOULD не публиковаться наружу.
 
@@ -603,6 +827,17 @@ LLM MUST:
 9. определить secrets/volumes;
 10. добавить health/retry semantics;
 11. проверить runtime.
+
+Для `shared-vlm` / `shared-embedding` новый project MUST сначала определить
+location client:
+
+```text
+same Docker host -> ai-shared + Docker DNS/internal port;
+other approved host -> SHARED_PUBLIC_HOST + published port.
+```
+
+После этого project использует logical model alias и не вводит inference API-key
+credentials.
 
 ---
 
