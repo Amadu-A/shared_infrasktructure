@@ -8,7 +8,6 @@
 | `shared-vlm` | `http://shared-vlm:8000/v1` | `8000` | shared, profile `ai-vlm` |
 | `shared-embedding` | `http://shared-embedding:8000` | `8001` | shared, profile `ai-embedding` |
 | `open-webui` | `http://open-webui:8080` | `3000` | shared optional, profile `ai-ui` |
-| `ollama` | `http://ollama:11434` | `11434` | shared transitional |
 | `n8n` | `http://n8n:5678` | `5678` | shared |
 | `rabbitmq` | `rabbitmq:5672` | `5672` | shared |
 | RabbitMQ Management | — | `15672` | shared admin UI |
@@ -29,14 +28,16 @@ http://<shared-host>:15672
 <shared-host>:5672
 ```
 
-Bind IP и host ports configurable через `.env`.
+Public server address, bind IP and host ports are configurable through `.env`.
+
+`SHARED_PUBLIC_HOST` is the IP/DNS advertised to clients on other hosts.
 
 Published shared services предназначены для trusted LAN/VPN и MUST быть
 ограничены host firewall.
 
 ## AI ownership
 
-Physical model, GPU list, TP и runtime limits принадлежат
+Physical model/revision, GPU list, TP/DP и runtime limits принадлежат
 `shared-infrastructure`, а не business project.
 
 Business projects используют logical contracts:

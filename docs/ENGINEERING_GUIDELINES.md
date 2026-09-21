@@ -1,6 +1,6 @@
 <!-- docs/ENGINEERING_GUIDELINES.md -->
 
-# Engineering Guidelines: Architecture, Backend Code Style, Testing, Observability and Configuration
+# Engineering Guidelines: Architecture, Code Style, Frontend and Configuration
 
 > **Назначение:** единый набор инженерных правил для проектов, которые проектируются или сопровождаются с использованием `shared-infrastructure`.
 >
@@ -59,7 +59,7 @@ LLM MUST сначала определить границы приложения
 └───────────────────────────────────────┘
 
 Infrastructure ───────implements──────► Application ports
-DB / MinIO / RabbitMQ / Ollama / SMTP / external APIs
+DB / MinIO / RabbitMQ / vLLM / SMTP / external APIs
 ```
 
 Допустим более простой проект с тремя физическими слоями:
@@ -195,7 +195,7 @@ Application layer MUST NOT зависеть от:
 
 - FastAPI `Request`, `Response`, `HTTPException`;
 - Jinja2;
-- конкретного RabbitMQ/MinIO/Ollama клиента;
+- конкретного RabbitMQ/MinIO/vLLM клиента;
 - конкретного SMTP клиента;
 - HTTP framework-specific объектов;
 - CSS/JS/UI;
@@ -225,7 +225,7 @@ SQLAlchemy session
 Celery
 RabbitMQ client
 MinIO client
-Ollama client
+vLLM client
 requests/httpx
 Jinja2
 ```
@@ -330,7 +330,7 @@ class ReviewUseCase:
 async def execute(...):
     repository = SqlAlchemyItemRepository(...)
     client = Minio(...)
-    llm = OllamaClient(...)
+    llm = VllmClient(...)
 ```
 
 Use-case не должен сам собирать свою инфраструктуру.
@@ -1220,7 +1220,7 @@ property/getter;
 важна отдельно:
 
 ```text
-ollama_inference
+shared_vlm_inference
 qdrant_search
 document_ocr
 external_api_request
@@ -1907,13 +1907,11 @@ LLM MUST:
 1. прочитать этот документ;
 2. прочитать project-specific README/architecture docs;
 3. прочитать `docs/LLM_CONTEXT.md`;
-4. если задача затрагивает frontend — полностью прочитать
-   `docs/FRONTEND_GUIDELINES.md`;
-5. проверить `docs/services.yaml`, если затрагивается shared infrastructure;
-6. определить shared vs project-specific dependencies;
-7. определить application boundaries;
-8. определить interfaces/ports;
-9. только после этого предлагать файлы и код.
+4. проверить `docs/services.yaml`, если затрагивается shared infrastructure;
+5. определить shared vs project-specific dependencies;
+6. определить application boundaries;
+7. определить interfaces/ports;
+8. только после этого предлагать файлы и код.
 
 ---
 
@@ -1930,8 +1928,6 @@ Reference project — пример, а не источник истины.
 - содержит устаревший workaround;
 
 LLM SHOULD следовать текущим правилам, а не повторять legacy pattern.
-
-Для frontend текущие правила определяются `docs/FRONTEND_GUIDELINES.md`.
 
 ---
 
@@ -1973,13 +1969,16 @@ LLM MUST явно указать:
 
 ### Frontend
 
-Frontend patterns являются source of truth в:
-
-```text
-docs/FRONTEND_GUIDELINES.md
-```
-
-При frontend-задаче этот файл MUST быть прочитан полностью.
+- один `style.css` entrypoint;
+- CSS imports из отдельных modules;
+- BEM;
+- semantic HTML;
+- `header/main/footer/section/aside`;
+- scripts в `<head>` с `defer`;
+- base template;
+- page/feature scripts через template block;
+- `data-*` hooks;
+- accessibility attributes.
 
 ### Configuration
 
@@ -2052,14 +2051,19 @@ docs/FRONTEND_GUIDELINES.md
 
 ## 60. Frontend
 
-Frontend review checklist вынесен в:
-
-```text
-docs/FRONTEND_GUIDELINES.md
-```
-
-При изменении frontend checklist из этого документа MUST быть выполнен
-полностью перед завершением задачи или merge.
+- [ ] Используется semantic HTML.
+- [ ] Повторяемая разметка вынесена в base/partials.
+- [ ] BEM соблюдён.
+- [ ] Нет больших inline `<style>`.
+- [ ] Нет inline `onclick`.
+- [ ] HTML подключает основной `style.css`.
+- [ ] `style.css` агрегирует block/module CSS.
+- [ ] CSS файлы соответствуют blocks/features, а не случайным страницам.
+- [ ] Scripts подключены в `<head>` с `defer` или `type="module"`.
+- [ ] Common JS и feature JS разделены.
+- [ ] JS использует `data-*` hooks там, где это разумно.
+- [ ] Dynamic status и controls доступны с keyboard/screen reader.
+- [ ] Недоверенные данные не вставляются через raw `innerHTML`.
 
 ---
 
@@ -2097,16 +2101,11 @@ data access;
 transactions;
 Python code style;
 документирование кода;
+frontend structure;
 configuration;
 logging / observability;
 testing;
 quality gates.
-```
-
-Frontend architecture/code style находится в отдельном обязательном source of truth:
-
-```text
-docs/FRONTEND_GUIDELINES.md
 ```
 
 Project-specific требования MAY уточнять этот baseline, если это необходимо
@@ -2200,7 +2199,7 @@ Infrastructure implements Application ports:
 PostgreSQL / SQLAlchemy
 MinIO / S3
 RabbitMQ
-Ollama
+vLLM / shared inference
 Qdrant
 SMTP
 external APIs

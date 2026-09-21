@@ -18,7 +18,6 @@ shared-infrastructure
 ├── shared-vlm (vLLM, profile ai-vlm)
 ├── shared-embedding (vLLM, profile ai-embedding)
 ├── Open WebUI (profile ai-ui)
-├── Ollama (transitional)
 ├── n8n
 │   └── n8n-db (private PostgreSQL только для n8n)
 └── RabbitMQ
@@ -54,8 +53,7 @@ shared-infrastructure/
 │   └── services.yaml
 └── scripts/
     ├── bootstrap.sh
-    ├── check.sh
-    └── pull-ollama-model.sh
+    └── check.sh
 ```
 
 ---
@@ -156,6 +154,7 @@ cd shared-infrastructure
 Для базового shared stack обычно достаточно:
 
 ```dotenv
+SHARED_PUBLIC_HOST=<server-ip-or-dns>
 N8N_DB_PASSWORD=<strong-password>
 N8N_ENCRYPTION_KEY=<generated-key>
 RABBITMQ_DEFAULT_PASS=<strong-password>
@@ -221,7 +220,6 @@ Shared API/UI services предназначены для доступа из tru
 SHARED_VLM_BIND_IP
 SHARED_EMBEDDING_BIND_IP
 OPEN_WEBUI_BIND_IP
-SHARED_BIND_IP
 N8N_BIND_IP
 RABBITMQ_BIND_IP
 ```
@@ -235,10 +233,14 @@ Baseline для shared API/UI:
 Это публикует service на всех host interfaces, поэтому host firewall MUST
 ограничивать доступ разрешёнными LAN/VPN source networks.
 
+`SHARED_PUBLIC_HOST` задаёт IP/DNS, который должны использовать clients на других
+машинах. Он не является bind address.
+
 При необходимости конкретный deployment может привязать service только к LAN IP:
 
 ```dotenv
-SHARED_VLM_BIND_IP=192.168.55.167
+SHARED_PUBLIC_HOST=192.168.55.3
+SHARED_VLM_BIND_IP=192.168.55.3
 ```
 
 Infrastructure-private dependencies, например `n8n-db`, наружу не публикуются.
@@ -263,15 +265,16 @@ Bootstrap:
 
 1. проверяет Docker;
 2. загружает sparse `.env`, если он существует;
-3. проверяет обязательные secrets;
-4. создаёт external network `ai-shared`, если нужно;
-5. валидирует Compose.
+3. проверяет обязательную deployment configuration и secrets;
+4. проверяет выбранные GPU/TP/DP для включённых AI profiles;
+5. создаёт external network `ai-shared`, если нужно;
+6. валидирует Compose.
 
 После этого:
 
 ```bash
 docker compose pull
-docker compose up -d
+docker compose up -d --remove-orphans
 docker compose ps
 ./scripts/check.sh
 ```
@@ -324,7 +327,7 @@ shared-vlm
 shared-embedding
 ```
 
-С другого компьютера или сервера используются published host endpoints:
+С другого компьютера или сервера используются published host endpoints через `SHARED_PUBLIC_HOST`:
 
 ```text
 http://<shared-host>:8000/v1
@@ -332,20 +335,9 @@ http://<shared-host>:8001
 http://<shared-host>:3000
 ```
 
-Physical model ID, GPU devices, Tensor Parallel, context и concurrency задаются
+Physical model ID/revision, GPU devices, Tensor/Data Parallel, context и concurrency задаются
 через `.env` и не должны hardcode-иться в application projects.
 
-Ollama сохраняется как transitional runtime для существующих consumers:
-
-```text
-http://ollama:11434
-```
-
-Проверка Ollama models:
-
-```bash
-docker compose exec ollama ollama list
-```
 
 ---
 
@@ -489,7 +481,6 @@ docker compose down -v
 
 - Hugging Face model cache;
 - vLLM cache;
-- Ollama models;
 - Open WebUI data;
 - n8n data;
 - n8n database;
@@ -507,7 +498,7 @@ Images pinned.
 git pull
 docker compose config --quiet
 docker compose pull
-docker compose up -d
+docker compose up -d --remove-orphans
 docker compose ps
 ./scripts/check.sh
 ```
@@ -573,11 +564,6 @@ Open WebUI:
 docker compose logs --tail=100 open-webui
 ```
 
-Ollama:
-
-```bash
-docker compose logs --tail=100 ollama
-```
 
 n8n:
 
@@ -662,7 +648,7 @@ scripts/
 shared-vlm      shared-    API frontend workers
 shared-embedding services   │
 Open WebUI        │          │
-Ollama / n8n / RabbitMQ     │
+n8n / RabbitMQ     │
           │                 │
           └──────────── ai-shared
                            │
@@ -676,7 +662,7 @@ Share infrastructure.
 Isolate application state.
 Use Docker DNS on the same host.
 Use published shared endpoints from trusted LAN/VPN.
-Keep physical model/GPU placement in deployment configuration.
+Keep physical model/revision/GPU placement in deployment configuration.
 Keep .env sparse.
 Verify runtime instead of assuming it.
 ```

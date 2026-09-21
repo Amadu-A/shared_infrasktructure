@@ -229,11 +229,6 @@ n8n:        http://n8n:5678
 RabbitMQ:   rabbitmq:5672
 ```
 
-Transitional runtime:
-
-```text
-Ollama: http://ollama:11434
-```
 
 ### Доступ с другого компьютера или сервера
 
@@ -249,11 +244,11 @@ Open WebUI:  http://<shared-host>:3000
 n8n:         http://<shared-host>:5678
 RabbitMQ:    <shared-host>:5672
 RabbitMQ UI: http://<shared-host>:15672
-Ollama:      http://<shared-host>:11434
 ```
 
-Конкретные bind IP и host ports определяются deployment configuration и
-`services.yaml`.
+Конкретный public host, bind IP и host ports определяются deployment configuration
+и `services.yaml`. `SHARED_PUBLIC_HOST` задаёт IP/DNS shared server для clients на
+других hosts.
 
 Host-published shared services MUST быть ограничены firewall правилами для
 разрешённых LAN/VPN source networks. Нельзя считать application-level API key
@@ -265,7 +260,6 @@ Host-published shared services MUST быть ограничены firewall пр�
 LLM MUST NOT автоматически добавлять в business project:
 
 ```text
-Ollama
 vLLM
 model server
 отдельную копию общей embedding model
@@ -297,7 +291,7 @@ SHARED_EMBEDDING_BASE_URL=http://<shared-host>:8001/v1
 SHARED_EMBEDDING_MODEL=shared-embedding
 ```
 
-Physical model ID, GPU placement, Tensor Parallel, model context и concurrency
+Physical model ID/revision, GPU placement, Tensor/Data Parallel, model context и concurrency
 являются deployment configuration shared infrastructure.
 
 Внутри Docker `localhost` означает текущий container.

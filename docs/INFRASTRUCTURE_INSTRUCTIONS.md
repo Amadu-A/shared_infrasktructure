@@ -81,7 +81,6 @@ PROJECT SERVICES
 ```text
 vLLM shared-vlm
 vLLM shared-embedding
-Ollama — transitional
 RabbitMQ
 n8n
 Open WebUI — optional human UI
@@ -187,7 +186,7 @@ Application projects
                             vLLM
 ```
 
-Application project MUST NOT поднимать собственный Ollama/vLLM или копию общей
+Application project MUST NOT поднимать собственный vLLM или копию общей
 модели, если подходящий shared endpoint уже существует.
 
 ### 6.1. Stable contracts
@@ -222,6 +221,7 @@ GPU index;
 Tensor Parallel size;
 число replicas;
 HuggingFace physical model ID;
+model revision;
 физическую GPU topology.
 ```
 
@@ -231,9 +231,11 @@ HuggingFace physical model ID;
 
 ```text
 physical model ID;
+model revision;
 model alias;
 GPU devices;
 Tensor Parallel size;
+Data Parallel size;
 context limit;
 GPU memory utilization;
 concurrency limits;
@@ -362,24 +364,8 @@ Infrastructure-private dependency, например `n8n-db`, SHOULD остав�
 Application-level API key является дополнительной защитой, но MUST NOT
 рассматриваться как замена firewall.
 
-### 6.9. Ollama transition
 
-Ollama является transitional shared service.
-
-Во время migration допустимо:
-
-```text
-existing consumers -> Ollama
-new/migrated consumers -> shared-vlm
-```
-
-Новые проекты SHOULD использовать `shared-vlm`, если нет документированной
-причины использовать Ollama.
-
-Ollama удаляется только после проверки, что active consumers больше от него
-не зависят.
-
-### 6.10. Что сейчас не добавляется
+### 6.9. Что сейчас не добавляется
 
 Без отдельного архитектурного решения MUST NOT добавляться:
 
@@ -670,13 +656,20 @@ LAN/VPN source networks.
 
 Deployment MAY вместо `0.0.0.0` указать конкретный LAN IP host.
 
+Public address для clients на других hosts задаётся отдельно:
+
+```text
+SHARED_PUBLIC_HOST
+```
+
+Он является IP/DNS advertised endpoint и не заменяет bind address.
+
 Примеры отдельных bind variables:
 
 ```text
 SHARED_VLM_BIND_IP
 SHARED_EMBEDDING_BIND_IP
 OPEN_WEBUI_BIND_IP
-SHARED_BIND_IP
 N8N_BIND_IP
 RABBITMQ_BIND_IP
 ```
@@ -704,14 +697,13 @@ localhost
 ```text
 http://shared-vlm:8000/v1
 http://shared-embedding:8000
-http://ollama:11434
 http://n8n:5678
 rabbitmq:5672
 postgres:5432
 ```
 
-Для client на другом host использовать IP/DNS shared server и опубликованный
-host port.
+Для client на другом host использовать `SHARED_PUBLIC_HOST` из deployment `.env`
+и опубликованный host port.
 
 Например:
 
@@ -807,7 +799,6 @@ Persistent volumes MUST быть изолированы по ownership.
 Примеры:
 
 ```text
-shared_ollama_data
 shared_n8n_data
 contract_ai_postgres_data
 pdrd_qdrant_data
@@ -821,7 +812,13 @@ pdrd_qdrant_data
 
 Infrastructure addresses MUST передаваться через configuration.
 
-Пример:
+Для shared infrastructure deployment public address MUST задаваться отдельно:
+
+```dotenv
+SHARED_PUBLIC_HOST=<server-ip-or-dns>
+```
+
+Пример application configuration:
 
 ```dotenv
 SHARED_VLM_BASE_URL=http://shared-vlm:8000/v1
@@ -1036,7 +1033,7 @@ depends_on:
 - как проверяется health;
 - как изолируются credentials/data.
 
-Нельзя автоматически добавлять vLLM, Ollama, RabbitMQ, n8n, Redis, Qdrant или
+Нельзя автоматически добавлять vLLM, RabbitMQ, n8n, Redis, Qdrant или
 PostgreSQL, не проверив существующую инфраструктуру и project requirements.
 
 ---
@@ -1114,8 +1111,7 @@ curl -fsS http://shared-vlm:8000/health
 curl -fsS http://shared-embedding:8000/health
 ```
 
-### Ollama — transitional
-
+### 
 ```bash
 curl -fsS http://127.0.0.1:11434/api/tags
 ```
@@ -1172,7 +1168,6 @@ curl -fsS http://127.0.0.1:6333/
 LLM MUST NOT автоматически:
 
 - добавлять project-local vLLM;
-- добавлять второй Ollama;
 - дублировать shared VLM или shared embedding model;
 - добавлять второй shared RabbitMQ;
 - добавлять второй shared n8n;
@@ -1294,7 +1289,6 @@ prod
 ```text
 [ ] Требуется shared-vlm?
 [ ] Требуется shared-embedding?
-[ ] Требуется transitional Ollama?
 [ ] Требуется RabbitMQ?
 [ ] Требуется Celery?
 [ ] Требуется n8n?
@@ -1321,7 +1315,7 @@ prod
 ```text
 [ ] Какая physical model загружается?
 [ ] Какие GPU ей доступны?
-[ ] Какой TP/replica layout выбран?
+[ ] Какой TP/DP/replica layout выбран?
 [ ] Какой context limit?
 [ ] Какие concurrency/backpressure limits?
 [ ] Проверена ли GPU topology для multi-GPU TP?
@@ -1360,7 +1354,6 @@ Shared infrastructure SHOULD храниться в отдельном repository
 shared-infrastructure
 ├── shared-vlm
 ├── shared-embedding
-├── Ollama (transitional)
 ├── Open WebUI (optional)
 ├── n8n
 └── RabbitMQ
@@ -1377,7 +1370,7 @@ Business project MUST NOT быть владельцем shared service, от к�
 
 ```text
 Project A compose
-└── vLLM / Ollama
+└── vLLM
 
 Project B
 └── depends on Project A model runtime
@@ -1433,7 +1426,7 @@ shared-vlm
 Share infrastructure.
 Isolate application state.
 Use stable logical inference endpoints.
-Keep physical model/GPU placement in shared deployment configuration.
+Keep physical model/revision/GPU placement in shared deployment configuration.
 Do not expose ports unnecessarily.
 Do not duplicate expensive services.
 Discover runtime before changing infrastructure.
