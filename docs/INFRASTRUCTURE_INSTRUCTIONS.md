@@ -520,7 +520,7 @@ docker compose up -d --force-recreate <service>
 
 Это НЕ bind address.
 
-Application API key не заменяет firewall.
+Published inference endpoints защищаются trusted LAN/VPN и host firewall.
 
 Infrastructure-private dependencies SHOULD не публиковаться наружу.
 

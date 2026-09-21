@@ -124,12 +124,11 @@ if service_running shared-vlm; then
   fi
 
   if curl -fsS \
-    -H "Authorization: Bearer ${SHARED_VLM_API_KEY:-}" \
     "http://${vlm_check_ip}:${SHARED_VLM_HOST_PORT}/v1/models" \
     >/dev/null 2>&1; then
-    ok "shared-vlm authenticated API"
+    ok "shared-vlm API"
   else
-    bad "shared-vlm authenticated API"
+    bad "shared-vlm API"
   fi
 
   if curl -fsS \
@@ -158,12 +157,11 @@ if service_running shared-embedding; then
   fi
 
   if curl -fsS \
-    -H "Authorization: Bearer ${SHARED_EMBEDDING_API_KEY:-}" \
     "http://${embedding_check_ip}:${SHARED_EMBEDDING_HOST_PORT}/v1/models" \
     >/dev/null 2>&1; then
-    ok "shared-embedding authenticated API"
+    ok "shared-embedding API"
   else
-    bad "shared-embedding authenticated API"
+    bad "shared-embedding API"
   fi
 
   if curl -fsS \

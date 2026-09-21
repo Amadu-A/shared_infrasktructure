@@ -163,8 +163,6 @@ RABBITMQ_DEFAULT_PASS=<strong-password>
 При включении AI profiles также нужны соответствующие secrets, например:
 
 ```dotenv
-SHARED_VLM_API_KEY=<strong-api-key>
-SHARED_EMBEDDING_API_KEY=<strong-api-key>
 OPEN_WEBUI_SECRET_KEY=<generated-key>
 ```
 

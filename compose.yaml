@@ -39,8 +39,6 @@ services:
       - "${SHARED_VLM_MODEL_REVISION:-main}"
       - --served-model-name
       - "${SHARED_VLM_MODEL_ALIAS:-shared-vlm}"
-      - --api-key
-      - "${SHARED_VLM_API_KEY:-CHANGE_ME_GENERATE_A_STRONG_API_KEY}"
       - --host
       - "0.0.0.0"
       - --port
@@ -112,8 +110,6 @@ services:
       - "${SHARED_EMBEDDING_MODEL_REVISION:-main}"
       - --served-model-name
       - "${SHARED_EMBEDDING_MODEL_ALIAS:-shared-embedding}"
-      - --api-key
-      - "${SHARED_EMBEDDING_API_KEY:-CHANGE_ME_GENERATE_A_STRONG_API_KEY}"
       - --runner
       - pooling
       - --host
@@ -178,7 +174,9 @@ services:
 
       ENABLE_OPENAI_API: "true"
       OPENAI_API_BASE_URL: http://shared-vlm:8000/v1
-      OPENAI_API_KEY: ${SHARED_VLM_API_KEY:-CHANGE_ME_GENERATE_A_STRONG_API_KEY}
+      # vLLM does not require authentication.
+      # Open WebUI receives a non-secret compatibility value.
+      OPENAI_API_KEY: "unused"
 
       # Explicitly disable Open WebUI's built-in Ollama connector.
       ENABLE_OLLAMA_API: "false"

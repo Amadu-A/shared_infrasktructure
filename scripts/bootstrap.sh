@@ -180,14 +180,12 @@ if profile_enabled ai-vlm; then
   require_value SHARED_VLM_MODEL_ID
   require_value SHARED_VLM_MODEL_REVISION
   require_value SHARED_VLM_GPU_DEVICES
-  require_value SHARED_VLM_API_KEY
 fi
 
 if profile_enabled ai-embedding; then
   require_value SHARED_EMBEDDING_MODEL_ID
   require_value SHARED_EMBEDDING_MODEL_REVISION
   require_value SHARED_EMBEDDING_GPU_DEVICES
-  require_value SHARED_EMBEDDING_API_KEY
 fi
 
 if profile_enabled ai-ui; then

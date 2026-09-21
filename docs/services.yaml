@@ -63,7 +63,7 @@ host_access_policy:
     - Bind IP and public host are different settings.
     - Application containers on the same host should use Docker DNS over ai-shared.
     - Infrastructure-private dependencies should not publish host ports.
-    - Application-level API keys are additional protection and do not replace host firewall rules.
+    - Published inference endpoints rely on trusted LAN/VPN reachability and host firewall rules.
 
 services:
   shared-vlm:
@@ -93,10 +93,10 @@ services:
       firewall_restricted: true
 
     authentication:
-      type: bearer_api_key
-      environment_variable: SHARED_VLM_API_KEY
+      type: none
+      perimeter: trusted_lan_vpn_firewall
       notes:
-        - Firewall protection remains mandatory.
+        - Access is controlled by network reachability and host firewall rules.
 
     endpoints:
       health: /health
@@ -152,10 +152,10 @@ services:
       firewall_restricted: true
 
     authentication:
-      type: bearer_api_key
-      environment_variable: SHARED_EMBEDDING_API_KEY
+      type: none
+      perimeter: trusted_lan_vpn_firewall
       notes:
-        - Firewall protection remains mandatory.
+        - Access is controlled by network reachability and host firewall rules.
 
     endpoints:
       health: /health
