@@ -163,8 +163,12 @@ RABBITMQ_DEFAULT_PASS=<strong-password>
 При включении AI profiles также нужны соответствующие secrets, например:
 
 ```dotenv
+SHARED_EMBEDDING_API_KEY=<strong-api-key>
 OPEN_WEBUI_SECRET_KEY=<generated-key>
 ```
+
+`shared-vlm` в текущей схеме не использует application API key. Доступ к его
+published endpoint должен ограничиваться trusted LAN/VPN и host firewall.
 
 Non-secret values **не нужно копировать** из `.env.example`.
 
@@ -336,6 +340,271 @@ http://<shared-host>:3000
 Physical model ID/revision, GPU devices, Tensor/Data Parallel, context и concurrency задаются
 через `.env` и не должны hardcode-иться в application projects.
 
+### `SHARED_VLM_MODEL_REVISION`
+
+`SHARED_VLM_MODEL_REVISION` задаёт конкретную revision Hugging Face repository,
+из которой должны быть загружены model weights/config/tokenizer.
+
+Допустимые варианты зависят от Hugging Face repository и обычно включают:
+
+```text
+main
+tag
+точный commit SHA
+```
+
+Например:
+
+```dotenv
+SHARED_VLM_MODEL_ID=Qwen/Qwen3.8-27B
+SHARED_VLM_MODEL_REVISION=main
+```
+
+`main` удобен для первичной проверки модели, но он не является immutable:
+содержимое ветки `main` на Hugging Face может измениться.
+
+Для принятой production-like модели SHOULD использовать точный commit SHA:
+
+```dotenv
+SHARED_VLM_MODEL_ID=Qwen/Qwen3.8-27B
+SHARED_VLM_MODEL_REVISION=<exact-hugging-face-commit-sha>
+```
+
+Это обеспечивает воспроизводимый recreate/rollback: один и тот же deployment
+получает тот же model snapshot.
+
+Revision, указанная при предварительном скачивании через `snapshot_download`,
+MUST совпадать с `SHARED_VLM_MODEL_REVISION`, которую затем использует vLLM.
+
+Логический alias при смене physical model не меняется:
+
+```dotenv
+SHARED_VLM_MODEL_ALIAS=shared-vlm
+```
+
+Application projects продолжают использовать:
+
+```text
+base URL: http://shared-vlm:8000/v1
+model:    shared-vlm
+```
+
+и не должны знать physical Hugging Face model ID/revision или GPU layout.
+
+### Утверждённый порядок смены physical VLM model
+
+Перед заменой модели MUST проверить:
+
+1. модель поддерживается используемой версией vLLM;
+2. нужная modality сохраняет application contract — VLM не заменяется text-only
+   моделью без отдельного архитектурного решения;
+3. weights/dtype помещаются в доступный GPU layout;
+4. определены `TP`, `DP`, `max_model_len` и ожидаемая VRAM;
+5. для gated/private Hugging Face model при необходимости настроен `HF_TOKEN`.
+
+Смена выполняется в следующем порядке.
+
+#### Шаг 1. Предварительно скачать новую модель в shared Hugging Face cache
+
+Текущий `shared-vlm` при этом продолжает работать со старой моделью.
+
+Пример:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  run --rm \
+  --no-deps \
+  --entrypoint python3 \
+  shared-vlm \
+  -c 'from huggingface_hub import snapshot_download; snapshot_download("mistralai/Mistral-Large-Instruct-2407", revision="main")'
+```
+
+`docker compose run` использует тот же persistent Hugging Face volume, что и
+`shared-vlm`, поэтому snapshot сохраняется в:
+
+```text
+/root/.cache/huggingface
+```
+
+а не исчезает после удаления временного container.
+
+Для production-like deployment вместо `main` SHOULD использоваться выбранный
+точный Hugging Face commit SHA.
+
+#### Шаг 2. Проверить, что snapshot появился в shared cache
+
+Для приведённого примера:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  run --rm \
+  --no-deps \
+  --entrypoint sh \
+  shared-vlm \
+  -c 'du -sh /root/.cache/huggingface/hub/models--mistralai--Mistral-Large-Instruct-2407'
+```
+
+Дополнительно SHOULD проверить свободное место:
+
+```bash
+df -h
+docker system df
+```
+
+#### Шаг 3. Изменить deployment configuration в `.env`
+
+Минимально меняются:
+
+```dotenv
+SHARED_VLM_MODEL_ID=mistralai/Mistral-Large-Instruct-2407
+SHARED_VLM_MODEL_REVISION=main
+```
+
+Для принятой production-like модели `main` SHOULD быть заменён точным commit SHA.
+
+Логический alias MUST оставаться:
+
+```dotenv
+SHARED_VLM_MODEL_ALIAS=shared-vlm
+```
+
+Если новая модель требует другого GPU layout, одновременно меняются deployment
+parameters, например:
+
+```dotenv
+SHARED_VLM_GPU_DEVICES=0,1,2,3
+SHARED_VLM_TP_SIZE=4
+SHARED_VLM_DP_SIZE=1
+SHARED_VLM_MAX_MODEL_LEN=32768
+```
+
+Конкретные значения GPU/TP/DP/context определяются размером модели, topology и
+benchmark. Их нельзя механически копировать от предыдущей модели.
+
+#### Шаг 4. Проверить configuration до остановки текущей модели
+
+```bash
+docker compose config --quiet
+```
+
+```bash
+./scripts/bootstrap.sh
+```
+
+Если проверки не прошли, текущий `shared-vlm` не пересоздавать.
+
+#### Шаг 5. Переключить `shared-vlm`
+
+После успешного pre-download и configuration validation:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  up -d \
+  --force-recreate \
+  shared-vlm
+```
+
+Отдельный `docker compose pull` для model weights не требуется: weights уже
+находятся в shared Hugging Face cache. `docker compose pull` нужен отдельно,
+если меняется сам `VLLM_IMAGE`.
+
+#### Шаг 6. Дождаться `healthy` и проверить startup
+
+```bash
+docker compose ps shared-vlm
+```
+
+```bash
+docker compose logs --tail=200 -f shared-vlm
+```
+
+Параллельно:
+
+```bash
+watch -n 1 nvidia-smi
+```
+
+Нельзя считать смену завершённой, пока container не стал `healthy`.
+
+#### Шаг 7. Smoke test logical contract
+
+Проверка списка моделей:
+
+```bash
+curl -fsS \
+  http://<shared-host>:8000/v1/models \
+  | python3 -m json.tool
+```
+
+Ответ должен по-прежнему содержать logical model:
+
+```text
+shared-vlm
+```
+
+Функциональный text request:
+
+```bash
+curl -sS \
+  -H "Content-Type: application/json" \
+  http://<shared-host>:8000/v1/chat/completions \
+  -d '{
+    "model": "shared-vlm",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Ответь только одним словом: РАБОТАЕТ"
+      }
+    ],
+    "max_tokens": 32
+  }' \
+  | python3 -m json.tool
+```
+
+Если shared contract предполагает vision, MUST отдельно выполнить image/VLM
+smoke test.
+
+После этого:
+
+```bash
+./scripts/check.sh
+```
+
+#### Шаг 8. Rollback при неуспешной смене
+
+Вернуть в `.env` предыдущие:
+
+```text
+SHARED_VLM_MODEL_ID
+SHARED_VLM_MODEL_REVISION
+SHARED_VLM_GPU_DEVICES
+SHARED_VLM_TP_SIZE
+SHARED_VLM_DP_SIZE
+SHARED_VLM_MAX_MODEL_LEN
+```
+
+и выполнить:
+
+```bash
+docker compose \
+  --profile ai-vlm \
+  up -d \
+  --force-recreate \
+  shared-vlm
+```
+
+Если предыдущий snapshot сохранился в shared Hugging Face cache, повторное
+скачивание обычно не требуется.
+
+Главный invariant:
+
+```text
+Application projects use shared-vlm.
+Only shared-infrastructure knows the physical model/revision/GPU layout.
+```
 
 ---
 
@@ -561,7 +830,6 @@ Open WebUI:
 ```bash
 docker compose logs --tail=100 open-webui
 ```
-
 
 n8n:
 
