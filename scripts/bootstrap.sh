@@ -4,7 +4,7 @@
 # Выполняет preflight shared-infrastructure перед первым запуском или
 # изменением deployment.
 #
-# Скрипт проверяет Docker, обязательную configuration, GPU topology,
+# Скрипт проверяет Docker, обязательную configuration, GPU layout,
 # существование shared Docker network и валидность Compose.
 #
 # Совместное использование одной physical GPU несколькими inference services
@@ -100,9 +100,7 @@ validate_gpu_layout() {
   local expected=$((tp * dp))
 
   if [[ "${#gpu_ids[@]}" -ne "${expected}" ]]; then
-    error \
-      "${prefix}: ${devices_name} contains ${#gpu_ids[@]} GPU(s), "`
-      `"but ${tp_name} * ${dp_name} = ${expected}."
+    error "${prefix}: ${devices_name} contains ${#gpu_ids[@]} GPU(s), but ${tp_name} * ${dp_name} = ${expected}."
   fi
 
   declare -A seen_gpu_ids=()
@@ -111,14 +109,12 @@ validate_gpu_layout() {
 
   for id in "${gpu_ids[@]}"; do
     if [[ ! "${id}" =~ ^[0-9]+$ ]]; then
-      error \
-        "${devices_name} must contain numeric GPU indexes; got '${id}'."
+      error "${devices_name} must contain numeric GPU indexes; got '${id}'."
       continue
     fi
 
     if [[ -n "${seen_gpu_ids[${id}]:-}" ]]; then
-      error \
-        "${devices_name} contains duplicate GPU index ${id}."
+      error "${devices_name} contains duplicate GPU index ${id}."
       continue
     fi
 
@@ -129,8 +125,7 @@ validate_gpu_layout() {
       --format=csv,noheader,nounits \
       2>/dev/null \
       | grep -Fxq "${id}"; then
-      error \
-        "GPU index ${id} from ${devices_name} does not exist on this host."
+      error "GPU index ${id} from ${devices_name} does not exist on this host."
     fi
   done
 }
@@ -151,10 +146,7 @@ warn_gpu_overlap() {
   for left in "${first_ids[@]}"; do
     for right in "${second_ids[@]}"; do
       if [[ -n "${left}" && "${left}" == "${right}" ]]; then
-        warning \
-          "GPU ${left} is assigned to both shared-vlm and shared-embedding. "`
-          `"This is allowed, but combined VRAM usage, "`
-          `"gpu-memory-utilization and stability MUST be verified at runtime."
+        warning "GPU ${left} is assigned to both shared-vlm and shared-embedding. This is allowed, but combined VRAM usage, gpu-memory-utilization and stability MUST be verified at runtime."
       fi
     done
   done
@@ -181,9 +173,7 @@ require_value RABBITMQ_DEFAULT_PASS
 if [[ "${SHARED_PUBLIC_HOST:-}" == http://* \
    || "${SHARED_PUBLIC_HOST:-}" == https://* \
    || "${SHARED_PUBLIC_HOST:-}" == */* ]]; then
-  error \
-    "SHARED_PUBLIC_HOST must be only an IP or DNS name, "`
-    `"without scheme, path or port."
+  error "SHARED_PUBLIC_HOST must be only an IP or DNS name, without scheme, path or port."
 fi
 
 if profile_enabled ai-vlm; then
