@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# scripts/bootstrap.sh
+#
+# Выполняет preflight shared-infrastructure перед первым запуском или
+# изменением deployment.
+#
+# Скрипт проверяет Docker, обязательную configuration, GPU topology,
+# существование shared Docker network и валидность Compose.
+#
+# Совместное использование одной physical GPU несколькими inference services
+# допускается архитектурой. Скрипт предупреждает об overlap, но не блокирует
+# deployment: ответственность за VRAM/capacity/stability несёт operator.
+
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -19,9 +31,14 @@ error() {
   fail=1
 }
 
+warning() {
+  printf '[WARN]  %s\n' "$1"
+}
+
 profile_enabled() {
   local profile="$1"
   local profiles=",${COMPOSE_PROFILES:-},"
+
   [[ "${profiles}" == *",${profile},"* ]]
 }
 
@@ -54,12 +71,14 @@ normalize_gpu_list() {
 
 validate_gpu_layout() {
   local prefix="$1"
+
   local devices_name="${prefix}_GPU_DEVICES"
   local tp_name="${prefix}_TP_SIZE"
   local dp_name="${prefix}_DP_SIZE"
 
   local devices
   devices="$(normalize_gpu_list "${!devices_name:-}")"
+
   local tp="${!tp_name:-1}"
   local dp="${!dp_name:-1}"
 
@@ -71,30 +90,52 @@ validate_gpu_layout() {
   validate_positive_int "${tp_name}" "${tp}"
   validate_positive_int "${dp_name}" "${dp}"
 
+  if [[ ! "${tp}" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "${dp}" =~ ^[1-9][0-9]*$ ]]; then
+    return
+  fi
+
   IFS=',' read -r -a gpu_ids <<<"${devices}"
 
   local expected=$((tp * dp))
 
   if [[ "${#gpu_ids[@]}" -ne "${expected}" ]]; then
-    error "${prefix}: ${devices_name} contains ${#gpu_ids[@]} GPU(s), but ${tp_name} * ${dp_name} = ${expected}."
+    error \
+      "${prefix}: ${devices_name} contains ${#gpu_ids[@]} GPU(s), "`
+      `"but ${tp_name} * ${dp_name} = ${expected}."
   fi
+
+  declare -A seen_gpu_ids=()
 
   local id
 
   for id in "${gpu_ids[@]}"; do
     if [[ ! "${id}" =~ ^[0-9]+$ ]]; then
-      error "${devices_name} must contain numeric GPU indexes; got '${id}'."
+      error \
+        "${devices_name} must contain numeric GPU indexes; got '${id}'."
       continue
     fi
 
-    if ! nvidia-smi --query-gpu=index --format=csv,noheader,nounits 2>/dev/null \
+    if [[ -n "${seen_gpu_ids[${id}]:-}" ]]; then
+      error \
+        "${devices_name} contains duplicate GPU index ${id}."
+      continue
+    fi
+
+    seen_gpu_ids["${id}"]=1
+
+    if ! nvidia-smi \
+      --query-gpu=index \
+      --format=csv,noheader,nounits \
+      2>/dev/null \
       | grep -Fxq "${id}"; then
-      error "GPU index ${id} from ${devices_name} does not exist on this host."
+      error \
+        "GPU index ${id} from ${devices_name} does not exist on this host."
     fi
   done
 }
 
-check_gpu_overlap() {
+warn_gpu_overlap() {
   local first
   local second
 
@@ -110,7 +151,10 @@ check_gpu_overlap() {
   for left in "${first_ids[@]}"; do
     for right in "${second_ids[@]}"; do
       if [[ -n "${left}" && "${left}" == "${right}" ]]; then
-        error "shared-vlm and shared-embedding both use GPU ${left}. Enabled resident services must use disjoint GPU sets."
+        warning \
+          "GPU ${left} is assigned to both shared-vlm and shared-embedding. "`
+          `"This is allowed, but combined VRAM usage, "`
+          `"gpu-memory-utilization and stability MUST be verified at runtime."
       fi
     done
   done
@@ -137,7 +181,9 @@ require_value RABBITMQ_DEFAULT_PASS
 if [[ "${SHARED_PUBLIC_HOST:-}" == http://* \
    || "${SHARED_PUBLIC_HOST:-}" == https://* \
    || "${SHARED_PUBLIC_HOST:-}" == */* ]]; then
-  error "SHARED_PUBLIC_HOST must be only an IP or DNS name, without scheme, path or port."
+  error \
+    "SHARED_PUBLIC_HOST must be only an IP or DNS name, "`
+    `"without scheme, path or port."
 fi
 
 if profile_enabled ai-vlm; then
@@ -188,7 +234,7 @@ if profile_enabled ai-vlm || profile_enabled ai-embedding; then
   fi
 
   if profile_enabled ai-vlm && profile_enabled ai-embedding; then
-    check_gpu_overlap
+    warn_gpu_overlap
   fi
 
   if [[ "${fail}" -ne 0 ]]; then

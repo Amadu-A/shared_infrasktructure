@@ -2,36 +2,110 @@
 
 # Infrastructure Development Instructions
 
-Читать этот документ, когда задача затрагивает Docker/Compose, deployment, networks, GPU, host ports, shared infrastructure или operational scripts.
+Этот документ описывает правила работы с инфраструктурой проектов и, прежде всего,
+с **переиспользуемыми shared services**.
 
-Если затронут shared service, дополнительно MUST прочитать `docs/services.yaml`.
+Главная цель документа — не позволить новому application project:
 
-Ключевые слова: **MUST** — обязательно; **SHOULD** — default; **MAY** — допустимо.
+- повторно поднимать уже существующий shared service;
+- встраивать shared runtime внутрь business service;
+- создавать собственную копию общей модели, broker или automation platform;
+- связывать business project с физической GPU topology;
+- превращать один business project во владельца инфраструктуры, которой пользуются другие проекты.
 
-## 1. Основной принцип
+Читать этот документ, когда задача затрагивает:
+
+```text
+Docker / Docker Compose;
+deployment;
+networks;
+host ports;
+GPU;
+shared AI inference;
+RabbitMQ;
+n8n;
+shared service integration;
+operational scripts;
+environment configuration.
+```
+
+Если задача добавляет, изменяет или использует shared service, LLM / developer
+**MUST дополнительно прочитать актуальный `docs/services.yaml`**.
+
+Ключевые слова:
+
+- **MUST** — обязательное правило;
+- **MUST NOT** — запрещённое действие;
+- **SHOULD** — решение по умолчанию, отклонение требует причины;
+- **MAY** — допустимый вариант.
+
+---
+
+## 1. Главный принцип
 
 ```text
 Share infrastructure.
 Isolate application state.
 Keep project lifecycle independent.
+Reuse existing shared services.
 Use stable logical contracts.
 Discover runtime before changing infrastructure.
 ```
 
-Несколько projects на одном host MUST не конфликтовать по Compose project names, host ports, private networks и persistent data.
+На одном физическом host могут работать несколько независимых проектов:
 
-Shared infrastructure хранится отдельно от business projects.
+```text
+HOST
+├── shared-infrastructure
+├── project-a
+├── project-b
+└── project-c
+```
 
-## 2. Discovery before change
+`shared-infrastructure` владеет общими сервисами.
 
-`services.yaml` описывает intended topology, но не доказывает runtime state.
+Business projects владеют только своей application logic, project-specific state,
+workers, database/vector storage и другими компонентами, которые действительно
+принадлежат конкретному проекту.
 
-Перед infrastructure change проверить relevant runtime:
+---
+
+## 2. Source of truth и обязательный discovery
+
+Machine-readable registry shared services:
+
+```text
+docs/services.yaml
+```
+
+Он описывает intended topology и ownership, но **не доказывает**, что service
+в данный момент запущен.
+
+Перед infrastructure change MUST:
+
+1. прочитать актуальный `docs/services.yaml`;
+2. прочитать актуальный `compose.yaml` затрагиваемого stack;
+3. прочитать связанные `.env.example` / configuration / scripts;
+4. проверить actual runtime;
+5. только после этого предлагать новый service или изменение существующего.
+
+Минимальная runtime-проверка:
 
 ```bash
 docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
+```
+
+```bash
 docker network ls
+```
+
+```bash
 sudo ss -lntp
+```
+
+Для GPU-related задачи:
+
+```bash
 nvidia-smi
 ```
 
@@ -39,17 +113,77 @@ Shared stack:
 
 ```bash
 cd ~/projects/shared-infrastructure
+```
+
+```bash
 docker compose ps
+```
+
+```bash
 ./scripts/check.sh
 ```
 
-Если shell-access отсутствует — запросить output у пользователя.
+Если shell access отсутствует, LLM MUST запросить relevant output у пользователя.
 
-Не проектировать infrastructure по памяти или старому Compose.
+LLM MUST NOT проектировать infrastructure:
 
-## 3. Shared vs project-specific
+- по памяти;
+- по старому сообщению;
+- по старому SHA;
+- по предположению о составе shared services;
+- только на основании `services.yaml` без runtime verification, если runtime важен для решения.
 
-Shared по текущей architecture:
+---
+
+## 3. Ownership: shared и project-specific
+
+Перед добавлением любого infrastructure component MUST определить его owner.
+
+### 3.1. Shared service
+
+Service считается shared, если:
+
+- им независимо пользуются несколько проектов;
+- его lifecycle не должен зависеть от lifecycle одного business project;
+- он зарегистрирован в `docs/services.yaml` как `managed_here: true`;
+- его конфигурацией и обновлением управляет `shared-infrastructure`.
+
+Business project **MUST NOT** повторно создавать такой service.
+
+### 3.2. Project-specific service
+
+Project-specific service:
+
+- исполняет код конкретного приложения;
+- хранит application-specific state;
+- имеет независимый lifecycle;
+- удаляется/обновляется вместе с project без влияния на другие проекты.
+
+По умолчанию project-specific:
+
+```text
+backend;
+frontend;
+application PostgreSQL;
+application Qdrant;
+application Redis;
+Celery worker;
+Celery beat;
+project migrations;
+project background workers;
+project-specific import/indexing jobs.
+```
+
+PostgreSQL, Qdrant или Redis MAY быть shared только после отдельного архитектурного
+решения и определения logical isolation, credentials, backup и ownership.
+
+---
+
+## 4. Текущие переиспользуемые shared services
+
+Актуальный полный registry всегда брать из `docs/services.yaml`.
+
+На текущей архитектуре к reusable shared infrastructure относятся:
 
 ```text
 shared-vlm
@@ -59,125 +193,810 @@ RabbitMQ
 n8n
 ```
 
-`n8n-db` — private dependency самого n8n.
-
-Project-specific по умолчанию:
+Также существует:
 
 ```text
-backend/frontend;
-application PostgreSQL;
-application Qdrant;
-application Redis;
-Celery worker/beat;
-project migrations/background jobs.
+n8n-db
 ```
 
-PostgreSQL/Qdrant/Redis MAY стать shared только по явному решению с logical isolation.
+но это **private infrastructure dependency самого n8n**, а не application database.
 
-Business project MUST NOT владеть shared service, от которого независимо зависят другие projects.
+### 4.1. `shared-vlm`
 
-## 4. Shared AI inference
-
-Target runtime — vLLM.
-
-Stable contracts:
+Назначение:
 
 ```text
-http://shared-vlm:8000/v1
-model: shared-vlm
-
-http://shared-embedding:8000
-model: shared-embedding
+общая LLM/VLM inference infrastructure
+для нескольких проектов и пользователей
 ```
 
-Business application MUST NOT зависеть от:
+Runtime:
 
 ```text
-physical Hugging Face model ID/revision;
-GPU index/model/count;
+vLLM
+```
+
+Stable same-host contract:
+
+```text
+base URL: http://shared-vlm:8000/v1
+model:    shared-vlm
+```
+
+Business project MUST использовать logical contract и MUST NOT знать:
+
+```text
+physical Hugging Face model ID;
+model revision;
+GPU index;
+GPU model/count;
 TP/DP layout;
 VRAM size;
 physical GPU topology.
 ```
 
-Это deployment configuration shared infrastructure:
+Эти параметры принадлежат deployment configuration `shared-infrastructure`.
+
+### 4.2. `shared-embedding`
+
+Назначение:
 
 ```text
-MODEL_ID / MODEL_REVISION
-GPU_DEVICES
-TP_SIZE / DP_SIZE
-MAX_MODEL_LEN
-GPU_MEMORY_UTILIZATION
-concurrency/backpressure limits
-bind IP / host port
+общая embedding infrastructure
 ```
 
-Один Compose SHOULD работать на разных GPU hosts через разные env values.
-
-### GPU placement
-
-Inference service получает GPU set из deployment configuration.
-
-Для TP>1 оператор MUST учитывать фактическую GPU topology и benchmark.
-
-Architecture MUST NOT запрещать использование одной physical GPU несколькими services только из-за совпадения индекса. Capacity/VRAM feasibility — responsibility deployment operator и runtime tests.
-
-Silent CPU fallback для shared inference не допускается.
-
-Production shared models SHOULD оставаться resident на протяжении lifecycle service. Request-level load/unload не является normal request path.
-
-### Concurrency и queues
-
-vLLM отвечает за short-lived inference scheduling/continuous batching/bounded admission.
-
-Interactive request SHOULD идти напрямую к shared inference endpoint.
-
-Durable/batch workload SHOULD использовать:
+Stable same-host contract:
 
 ```text
+base URL: http://shared-embedding:8000/v1
+model:    shared-embedding
+```
+
+Типичные endpoints:
+
+```text
+/v1/embeddings
+/pooling
+```
+
+Business project MUST NOT поднимать собственную копию общей embedding model,
+если существующий shared endpoint удовлетворяет требованиям проекта.
+
+### 4.3. Open WebUI
+
+Назначение:
+
+```text
+human-facing chat;
+prompt testing;
+vision testing;
+manual verification shared models.
+```
+
+Same-host endpoint:
+
+```text
+http://open-webui:8080
+```
+
+Open WebUI:
+
+- MAY использоваться разработчиками и пользователями;
+- MUST NOT быть dependency business application;
+- MUST NOT владеть model lifecycle;
+- MUST NOT заставлять project поднимать собственный model runtime.
+
+### 4.4. RabbitMQ
+
+RabbitMQ — общий broker.
+
+Same-host endpoint:
+
+```text
+rabbitmq:5672
+```
+
+Projects SHOULD использовать:
+
+```text
+one vhost per project
+one application user per project
+```
+
+Application MUST NOT использовать bootstrap/admin account как обычный runtime account.
+
+### 4.5. n8n
+
+n8n — shared automation/orchestration service.
+
+Same-host endpoint:
+
+```text
+http://n8n:5678
+```
+
+Workflow names SHOULD иметь project namespace:
+
+```text
+[PDRD] ...
+[CONTRACT] ...
+[PROJECT-X] ...
+```
+
+Новый project MUST NOT автоматически поднимать собственный n8n только потому,
+что ему нужен workflow.
+
+### 4.6. `n8n-db`
+
+`n8n-db` принадлежит только n8n.
+
+Он:
+
+```text
+не является shared application PostgreSQL;
+не должен использоваться business projects;
+не должен публиковаться наружу только ради application access.
+```
+
+---
+
+## 5. Главное anti-duplication rule
+
+Если service в `docs/services.yaml` имеет:
+
+```yaml
+managed_here: true
+```
+
+то новый business project MUST считать его внешней shared dependency.
+
+Новый project MUST NOT:
+
+```text
+добавлять копию этого service в свой compose;
+добавлять model runtime в свой Dockerfile;
+поднимать отдельный broker только для обычного использования;
+поднимать отдельный n8n без явной причины;
+скачивать и обслуживать общую model локально;
+делать project owner'ом shared service;
+копировать shared persistent volume;
+копировать shared admin credentials.
+```
+
+Правильная модель:
+
+```text
+shared-infrastructure
+├── shared-vlm
+├── shared-embedding
+├── RabbitMQ
+├── n8n
+└── Open WebUI
+
+Project A ─┐
+Project B ─┼──> shared services
+Project C ─┘
+```
+
+Неправильная модель:
+
+```text
+Project A
+├── backend
+├── own-vllm
+├── own-rabbitmq
+└── own-n8n
+
+Project B
+├── backend
+├── another-vllm
+├── another-rabbitmq
+└── another-n8n
+```
+
+---
+
+## 6. Что MAY находиться в новом project
+
+Запрет на дублирование shared runtime **не запрещает client/adaptor code**.
+
+Business project MAY иметь:
+
+```text
+VllmClient / SharedVlmClient;
+EmbeddingClient;
+RabbitMQ publisher/consumer adapter;
+n8n API client;
+configuration для shared endpoint;
+health/readiness probe к required dependency;
+retry / timeout / circuit-breaker logic;
+application-specific DTO/ports/interfaces.
+```
+
+То есть project хранит **клиент**, но не владеет **сервером**.
+
+Пример:
+
+```text
+Project
+├── application/
+│   └── ports/
+│       └── vision_model.py
+│
+├── infrastructure/
+│   └── shared_ai/
+│       └── vllm_client.py
+│
+└── compose.yaml
+    └── НЕ содержит shared-vlm
+```
+
+Это правильный dependency direction.
+
+---
+
+## 7. Как подключать новый project к shared services
+
+### 7.1. Project на том же Docker host
+
+Application container SHOULD подключаться к external network:
+
+```text
+ai-shared
+```
+
+Пример project Compose:
+
+```yaml
+services:
+  api:
+    networks:
+      - default
+      - ai-shared
+
+networks:
+  ai-shared:
+    external: true
+    name: ai-shared
+```
+
+Private application dependencies SHOULD оставаться в project network.
+
+Например:
+
+```text
+api
+├── project private network -> postgres / qdrant / redis
+└── ai-shared               -> shared-vlm / RabbitMQ / n8n
+```
+
+### 7.2. Stable Docker DNS
+
+На том же host использовать Docker DNS/internal ports:
+
+```text
+shared-vlm:       http://shared-vlm:8000/v1
+shared-embedding: http://shared-embedding:8000/v1
+Open WebUI:       http://open-webui:8080
+n8n:              http://n8n:5678
+RabbitMQ:         rabbitmq:5672
+```
+
+Не использовать host-published port для container-to-container traffic без причины.
+
+### 7.3. Project на другом host
+
+Использовать:
+
+```text
+SHARED_PUBLIC_HOST
++
+published host port
+```
+
+Пример:
+
+```text
+http://<SHARED_PUBLIC_HOST>:8000/v1
+http://<SHARED_PUBLIC_HOST>:8001/v1
+http://<SHARED_PUBLIC_HOST>:5678
+<SHARED_PUBLIC_HOST>:5672
+```
+
+Точные host ports MUST браться из актуальных:
+
+```text
+docs/services.yaml
+.env.example
+deployment .env
+```
+
+### 7.4. `localhost` внутри Docker
+
+Внутри container:
+
+```text
+localhost
+127.0.0.1
+```
+
+означают текущий container.
+
+Они НЕ означают:
+
+```text
+Docker host;
+shared-vlm;
+RabbitMQ;
+n8n;
+PostgreSQL другого container.
+```
+
+Для другого container на той же Docker network использовать service DNS name.
+
+---
+
+## 8. Cross-project lifecycle
+
+Business project MUST сохранять независимый lifecycle.
+
+Остановка:
+
+```text
+Project A
+```
+
+не должна останавливать:
+
+```text
+shared-vlm
 RabbitMQ
+n8n
+shared-embedding
+Project B
+```
+
+И наоборот, business project MUST уметь корректно переживать временную
+недоступность shared dependency через:
+
+```text
+timeout;
+controlled retry;
+backpressure;
+graceful error handling;
+readiness/health semantics.
+```
+
+Business project SHOULD NOT пытаться самостоятельно restart/recreate shared service.
+
+Lifecycle shared service принадлежит `shared-infrastructure`.
+
+---
+
+## 9. Shared AI inference
+
+### 9.1. Target runtime
+
+Target runtime:
+
+```text
+vLLM
+```
+
+Application code SHOULD использовать stable logical service/model identity.
+
+Для VLM:
+
+```text
+base URL: http://shared-vlm:8000/v1
+model:    shared-vlm
+```
+
+Для embedding:
+
+```text
+base URL: http://shared-embedding:8000/v1
+model:    shared-embedding
+```
+
+### 9.2. Physical model configuration
+
+Business project MUST NOT hardcode:
+
+```text
+Qwen/... physical model ID;
+HF revision;
+GPU 0/1/2/3;
+Tensor Parallel size;
+Data Parallel size;
+max model context;
+GPU memory utilization;
+physical topology.
+```
+
+Это configuration shared deployment.
+
+Один и тот же logical contract SHOULD сохраняться между:
+
+```text
+DEV host;
+STAGE host;
+PROD host;
+single-GPU host;
+multi-GPU host.
+```
+
+Project должен менять endpoint/configuration environment, а не business logic.
+
+### 9.3. Model residency
+
+Production shared model SHOULD оставаться resident в GPU memory в течение
+lifecycle inference service.
+
+Normal request path MUST NOT быть:
+
+```text
+request
+-> load model
+-> inference
+-> unload model
+```
+
+Одна загруженная shared model обслуживает запросы нескольких projects/users.
+
+### 9.4. Concurrency
+
+vLLM отвечает за:
+
+```text
+concurrent inference;
+continuous batching;
+inference scheduling;
+bounded admission/backpressure.
+```
+
+Project MUST NOT создавать отдельный model process на каждого пользователя или запрос.
+
+### 9.5. Interactive и batch
+
+Interactive workload:
+
+```text
+user/API
+-> shared inference
+```
+
+Durable/background workload:
+
+```text
+Project API
+-> RabbitMQ
 -> bounded project worker
 -> shared inference
 ```
 
-### Embedding compatibility
+RabbitMQ используется для durable job lifecycle, retry и workload smoothing.
 
-Нельзя silently менять embedding model/vector identity.
+RabbitMQ не нужен только для того, чтобы сделать обычный interactive model call.
 
-При смене model/preprocessing/dimension/normalization project MUST проверить compatibility existing index и выполнить controlled reindex/migration, если vectors несовместимы.
+---
 
-### Open WebUI
+## 10. GPU и hardware portability
 
-Open WebUI — human-facing UI для manual chat/prompt/vision testing.
+GPU является physical shared resource, но business applications не должны
+знать physical layout.
 
-Он MUST NOT быть dependency business applications и не является source of truth для vLLM lifecycle.
-
-## 5. Что не добавлять автоматически
-
-Без отдельного решения MUST NOT добавляться:
+Shared deployment configuration определяет:
 
 ```text
-project-local vLLM, если подходит shared;
-duplicate shared model;
-Ray Serve;
-Kubernetes/k3s;
-GPU Operator;
-service mesh;
-request-level dynamic model load/unload;
-gateway только "на будущее".
+MODEL_ID / MODEL_REVISION;
+GPU_DEVICES;
+TP_SIZE;
+DP_SIZE;
+MAX_MODEL_LEN;
+GPU_MEMORY_UTILIZATION;
+concurrency / queue limits.
 ```
 
-Gateway MAY появиться позже для quotas/trusted priorities/routing/audit, если появится реальная необходимость.
+Для `TP_SIZE > 1` operator MUST учитывать фактическую GPU topology и benchmark.
 
-## 6. Docker access model
+Нельзя выбирать multi-GPU TP по принципу:
 
-Same-host containers SHOULD использовать Docker DNS/internal ports через `ai-shared`.
+```text
+любые две свободные карты
+```
 
-Другой computer/server использует `SHARED_PUBLIC_HOST` и published port.
+без проверки topology.
 
-`SHARED_PUBLIC_HOST` — IP/DNS для clients. Это НЕ bind address.
+Если модель помещается на одной GPU, `TP=1` SHOULD быть baseline для benchmark.
 
-Bind variables определяют local interface:
+Окончательный выбор между:
+
+```text
+single GPU;
+TP;
+несколькими replicas / DP;
+```
+
+делается по измерениям, а не по размеру модели "на глаз".
+
+Architecture MUST NOT автоматически запрещать нескольким services использовать
+один physical GPU только из-за совпадения GPU index.
+
+Но совместное использование допустимо только если operator подтвердил:
+
+```text
+VRAM feasibility;
+runtime stability;
+отсутствие OOM;
+приемлемую latency/throughput.
+```
+
+Silent CPU fallback для shared inference не допускается.
+
+---
+
+## 11. Embedding compatibility
+
+Embedding identity является частью data contract.
+
+Нельзя silently менять:
+
+```text
+embedding model;
+model revision;
+vector dimension;
+preprocessing;
+normalization;
+multimodal processing semantics.
+```
+
+Если project имеет существующий vector index, смена embedding runtime/model
+MUST сопровождаться compatibility check.
+
+Если vectors несовместимы:
+
+```text
+создать controlled migration plan;
+при необходимости создать новую collection/index;
+выполнить reindex;
+переключить consumers;
+проверить retrieval quality;
+только затем удалить старый index/runtime.
+```
+
+Project MUST NOT смешивать несовместимые старые и новые vectors без явно
+подтверждённой совместимости.
+
+---
+
+## 12. RabbitMQ: правила переиспользования
+
+RabbitMQ server является shared.
+
+Project-specific:
+
+```text
+exchange;
+queue;
+routing key;
+vhost;
+application user;
+consumer/worker code.
+```
+
+Shared:
+
+```text
+RabbitMQ broker lifecycle;
+broker container;
+management UI;
+base infrastructure.
+```
+
+Предпочтительно:
+
+```text
+one vhost per project
+one application user per project
+```
+
+Пример logical separation:
+
+```text
+/pdrd
+/contract-ai
+/project-x
+```
+
+Project Celery worker остаётся project-specific:
+
+```text
+shared RabbitMQ
+      │
+      ├── project-a worker
+      ├── project-b worker
+      └── project-c worker
+```
+
+Нельзя переносить application worker в shared только потому, что broker shared.
+
+---
+
+## 13. n8n: правила переиспользования
+
+n8n lifecycle принадлежит shared infrastructure.
+
+Project MAY создавать:
+
+```text
+workflows;
+credentials, если политика безопасности допускает;
+webhooks;
+project-specific workflow conventions.
+```
+
+Project MUST NOT автоматически создавать отдельный n8n container.
+
+Workflow names SHOULD иметь namespace:
+
+```text
+[PDRD] ...
+[CONTRACT] ...
+[PROJECT-X] ...
+```
+
+Отдельный n8n MAY быть оправдан только отдельным архитектурным решением, например:
+
+```text
+жёсткая tenant isolation;
+несовместимая версия;
+независимое maintenance window;
+отдельная security policy;
+отдельный backup/restore boundary.
+```
+
+---
+
+## 14. Project-specific databases и data services
+
+### PostgreSQL
+
+Application PostgreSQL SHOULD быть project-specific.
+
+Если несколько проектов должны использовать один PostgreSQL service,
+это требует отдельного решения по:
+
+```text
+database isolation;
+users/credentials;
+privileges;
+backup;
+restore;
+upgrade lifecycle.
+```
+
+`n8n-db` MUST NOT использоваться как application database.
+
+### Qdrant
+
+Qdrant SHOULD быть project-specific по умолчанию.
+
+Если Qdrant становится shared:
+
+```text
+collections MUST иметь project namespace;
+embedding identity MUST быть документирована;
+backup/migration ownership MUST быть определён.
+```
+
+### Redis
+
+Redis MAY быть project-specific или shared только после определения:
+
+```text
+namespace;
+ACL;
+data sensitivity;
+eviction policy;
+persistence;
+ownership.
+```
+
+---
+
+## 15. Когда duplicate service всё же допустим
+
+Дублирование shared service — исключение, а не default.
+
+Отдельный экземпляр MAY быть создан только если есть документированная причина,
+например:
+
+```text
+несовместимая major version;
+security/tenant isolation;
+regulatory boundary;
+необходим независимый upgrade window;
+несовместимый model/runtime;
+экспериментальный sandbox;
+нагрузка требует отдельного physical deployment;
+shared service не предоставляет требуемый contract.
+```
+
+Перед таким решением MUST:
+
+1. проверить, нельзя ли расширить существующий shared contract;
+2. описать причину;
+3. указать нового owner;
+4. определить network/ports/volumes/secrets;
+5. определить lifecycle и backup;
+6. убедиться, что новый service не маскируется под существующий logical contract;
+7. получить явное архитектурное решение.
+
+LLM MUST NOT создавать duplicate service "на всякий случай".
+
+---
+
+## 16. Docker ports, networks и isolation
+
+### Container port vs host port
+
+Container-to-container communication не требует публикации host port.
+
+Например:
+
+```text
+postgres:5432
+rabbitmq:5672
+shared-vlm:8000
+```
+
+доступны внутри соответствующих Docker networks без отдельного host port.
+
+Host port публикуется только когда service должен быть доступен:
+
+```text
+из trusted LAN/VPN;
+с другого application host;
+человеку через UI/admin interface;
+external callback/webhook consumer.
+```
+
+### `ai-shared`
+
+`ai-shared` — external cross-project network для approved shared services.
+
+Новый project SHOULD подключать к `ai-shared` только те services, которым
+действительно нужен shared dependency.
+
+Project database SHOULD оставаться в private project network.
+
+### `container_name`
+
+`container_name` SHOULD NOT использоваться без необходимости.
+
+Compose project prefix даёт более безопасную изоляцию и уменьшает collisions.
+
+### Compose project name
+
+Каждый stack MUST иметь уникальное Compose project name.
+
+### Volumes
+
+Persistent volume MUST иметь понятного owner.
+
+Независимые stateful services MUST NOT разделять один data volume без явного
+архитектурного решения.
+
+---
+
+## 17. Public access и security
+
+`SHARED_PUBLIC_HOST` — IP/DNS, который используют approved clients на других hosts.
+
+Это НЕ bind address.
+
+Bind variables определяют local interface, например:
 
 ```text
 SHARED_VLM_BIND_IP
@@ -187,96 +1006,254 @@ N8N_BIND_IP
 RABBITMQ_BIND_IP
 ```
 
-Для trusted LAN/VPN `0.0.0.0` MAY использоваться как baseline, если host firewall ограничивает source networks.
+Для trusted LAN/VPN `0.0.0.0` MAY быть допустим, если host firewall ограничивает
+source networks.
 
-Application-level API key — дополнительная защита, но не замена firewall.
+Application-level API key является дополнительной защитой, но не заменяет firewall.
 
-Infrastructure-private dependencies SHOULD не иметь published host port.
+Infrastructure-private dependency SHOULD не иметь published host port.
 
-## 7. Docker networks и ownership
+Secrets MUST NOT попадать в Git или diagnostics/logs.
 
-Shared external network:
+---
+
+## 18. Environment configuration
+
+`.env.example`:
 
 ```text
-ai-shared
+committed;
+полный catalog поддерживаемых variables;
+safe defaults;
+placeholders вместо secrets;
+не содержит production secrets.
 ```
 
-Application service подключается к ней только если нужен shared dependency.
+`.env`:
 
-Project database SHOULD оставаться в private project network.
+```text
+private;
+sparse;
+real secrets;
+environment-specific overrides;
+не коммитится.
+```
 
-`container_name` SHOULD NOT использоваться без необходимости.
+Compose non-secret default SHOULD использовать:
 
-Каждый Compose stack MUST иметь уникальный project name.
+```yaml
+${VAR:-default}
+```
 
-Persistent volumes MUST быть изолированы по ownership.
+Required secret SHOULD использовать:
 
-## 8. Environment и secrets
+```yaml
+${VAR:?VAR must be set}
+```
 
-`.env.example` — committed catalog variables/defaults/placeholders.
+или equivalent validation script.
 
-`.env` — private sparse override: real secrets + environment-specific deployment values.
-
-`.env` MUST NOT попадать в Git.
-
-Compose non-secret defaults SHOULD задаваться через `${VAR:-default}`. Required secrets SHOULD использовать `${VAR:?message}` или equivalent validation scripts.
-
-После изменения container environment/config обычный `docker compose restart` не применяет большинство изменений — нужен recreate:
+После изменения container environment/config обычный:
 
 ```bash
-docker compose up -d --force-recreate
+docker compose restart
 ```
 
-Не использовать `down -v` без осознанной необходимости.
+обычно не применяет новое environment.
 
-## 9. Public URLs
+Нужен recreate:
 
-Если shared service должен знать собственный public URL, он SHOULD вычисляться из `SHARED_PUBLIC_HOST` + соответствующего port/protocol.
-
-Это особенно важно для callback/webhook/OAuth services, например n8n:
-
-```text
-N8N_HOST
-N8N_EDITOR_BASE_URL
-WEBHOOK_URL
+```bash
+docker compose up -d --force-recreate <service>
 ```
 
-Public URL и bind address не смешивать.
+Не использовать:
 
-## 10. RabbitMQ и n8n
+```bash
+docker compose down -v
+```
 
-RabbitMQ — shared broker. Projects SHOULD использовать one vhost + one application user per project. Application SHOULD NOT использовать bootstrap admin account.
+без осознанной необходимости, потому что `-v` может удалить persistent data/model cache.
 
-n8n — shared service. Workflow names SHOULD иметь project namespace (`[PDRD]`, `[CONTRACT]`, ...).
+---
 
-Private `n8n-db` принадлежит только n8n и MUST NOT использоваться application projects.
+## 19. Health, readiness и lifecycle
 
-## 11. PostgreSQL / Qdrant / Redis
-
-Application PostgreSQL SHOULD быть project-specific. Если shared — отдельные database/user/credentials и independent backup strategy.
-
-Qdrant SHOULD быть project-specific. При shared Qdrant collections MUST иметь project namespace.
-
-Redis MAY быть project-specific или shared по отдельному решению; shared usage требует namespace/ACL/instance isolation по риску данных.
-
-## 12. Health, lifecycle и logging
-
-Long-running services SHOULD иметь:
+Long-running service SHOULD иметь:
 
 ```text
 healthcheck;
-restart: unless-stopped;
+restart policy;
 bounded logs;
-persistent volume там, где есть state.
+persistent volume, если service stateful.
 ```
 
-Если start зависит от readiness dependency, SHOULD использовать health condition там, где поддерживается.
+Если service зависит от readiness другой dependency, startup logic SHOULD
+использовать readiness/health semantics, а не только порядок запуска.
 
-One-shot migrations/indexing/import jobs SHOULD быть отделены от ordinary startup и не должны бесконечно restart-иться.
+Cross-project dependency нельзя выразить обычным `depends_on` между независимыми
+Compose projects.
 
-Docker/container logs MUST иметь конечную rotation/retention policy.
+Поэтому business application SHOULD:
 
-## 13. Runtime operations
+```text
+иметь timeout;
+корректно обрабатывать connection failure;
+при необходимости выполнять bounded retry;
+не считать факт запуска собственного container доказательством готовности shared service.
+```
+
+One-shot:
+
+```text
+migration;
+indexing;
+data import;
+reindex;
+model benchmark;
+```
+
+не должны автоматически становиться бесконечно перезапускаемыми long-running services.
+
+---
+
+## 20. Logging и observability
+
+Container SHOULD быть диагностируем через:
+
+```bash
+docker compose logs
+```
+
+Logs MUST иметь finite rotation/retention policy.
+
+High-frequency infrastructure path MUST NOT создавать uncontrolled log spam.
+
+Для shared inference SHOULD быть доступны метрики, позволяющие оценивать:
+
+```text
+health;
+active/waiting requests;
+latency;
+throughput;
+GPU/VRAM utilization;
+queue/backpressure;
+errors.
+```
+
+Business project не должен самостоятельно управлять lifecycle shared monitoring
+компонентов, если они принадлежат shared stack.
+
+---
+
+## 21. Как добавлять новый shared service
+
+Новый service НЕ становится shared только потому, что его "могут когда-нибудь использовать".
+
+Перед добавлением нового shared service MUST ответить:
+
+```text
+Кто owner?
+Какие проекты используют его сейчас?
+Почему project-specific instance недостаточен?
+Какой stable logical contract?
+Какой Docker DNS name?
+Какая network?
+Какой internal port?
+Нужен ли published host port?
+Какая authentication?
+Какие credentials/isolation boundaries?
+Какие volumes?
+Какой backup/restore?
+Какой healthcheck?
+Как обновляется service?
+Как откатить изменение?
+```
+
+После принятия решения MUST согласованно обновить:
+
+```text
+shared compose/config;
+.env.example;
+docs/services.yaml;
+Infrastructure Instructions, если меняется правило;
+bootstrap/check scripts, если требуется;
+README/SERVICES, если они описывают новый public/operator workflow.
+```
+
+Не добавлять service только в один файл документации.
+
+---
+
+## 22. Пошаговый алгоритм LLM при новом project
+
+Если создаётся новый business project, LLM MUST действовать так:
+
+1. Прочитать актуальный `docs/services.yaml`.
+2. Составить список required external dependencies.
+3. Для каждой dependency проверить `managed_here`.
+4. Если `managed_here: true`:
+   - НЕ добавлять server container в project;
+   - подключить project как client;
+   - использовать stable logical endpoint;
+   - добавить только нужную client configuration/adaptor.
+5. Если service отсутствует:
+   - определить, project-specific он или кандидат в shared;
+   - не объявлять его shared автоматически.
+6. Определить project private network.
+7. Подключить только нужные application services к `ai-shared`.
+8. Не публиковать host ports без необходимости.
+9. Определить project volumes/state.
+10. Проверить secrets.
+11. Добавить health/retry semantics для required shared dependencies.
+12. Проверить runtime после запуска.
+
+---
+
+## 23. Stop conditions для LLM
+
+LLM MUST остановиться и уточнить архитектурное решение, если собирается:
+
+```text
+добавить второй vLLM/model server;
+добавить отдельную копию общей embedding model;
+добавить отдельный RabbitMQ;
+добавить отдельный n8n;
+сделать application PostgreSQL shared;
+сделать application Qdrant shared;
+перенести project worker в shared;
+зависеть от GPU index/model ID в business code;
+выдать admin shared credentials application runtime;
+подключить project DB к shared network без причины;
+опубликовать stateful/private service наружу без причины;
+создать duplicate service "для удобства".
+```
+
+Исключение возможно только после явно сформулированной причины.
+
+---
+
+## 24. Что не добавлять автоматически
+
+Без отдельного архитектурного решения MUST NOT добавляться:
+
+```text
+project-local vLLM, если подходит shared-vlm;
+duplicate shared embedding model;
+duplicate RabbitMQ;
+duplicate n8n;
+Ray Serve;
+Kubernetes / k3s;
+GPU Operator;
+service mesh;
+request-level dynamic model load/unload;
+gateway только "на будущее";
+shared PostgreSQL/Qdrant/Redis без isolation design.
+```
+
+---
+
+## 25. Runtime operations
 
 Перед запуском:
 
@@ -284,15 +1261,25 @@ Docker/container logs MUST иметь конечную rotation/retention policy
 docker compose config --quiet
 ```
 
-Запуск/проверка:
+Запуск:
 
 ```bash
 docker compose up -d
+```
+
+Проверка:
+
+```bash
 docker compose ps
+```
+
+Shared stack:
+
+```bash
 ./scripts/check.sh
 ```
 
-Диагностика:
+Диагностика отдельного service:
 
 ```bash
 docker compose logs --tail=100 <service>
@@ -304,41 +1291,80 @@ docker compose logs --tail=100 <service>
 docker compose up -d --force-recreate <service>
 ```
 
-## 14. Shared endpoints
+Перед destructive operation developer/LLM MUST явно объяснить последствия.
 
-Same host / `ai-shared`:
+---
 
-```text
-shared-vlm:       http://shared-vlm:8000/v1
-shared-embedding: http://shared-embedding:8000
-Open WebUI:       http://open-webui:8080
-n8n:              http://n8n:5678
-RabbitMQ:         rabbitmq:5672
-```
+## 26. Infrastructure Definition of Done
 
-Other trusted host:
+Перед завершением infrastructure task проверить:
 
 ```text
-http://<SHARED_PUBLIC_HOST>:<published-port>
-```
-
-Точные ports/contracts брать из `services.yaml` и актуального `.env.example`.
-
-## 15. Checklist / Definition of Done
-
-```text
-[ ] Прочитан актуальный Compose/config/scripts.
-[ ] Проверен runtime state.
-[ ] Проверен services.yaml, если затронут shared.
-[ ] Ownership shared vs project-specific определён.
-[ ] Host ports/networks/volumes не конфликтуют.
-[ ] Secrets не попадут в Git.
+[ ] Прочитан актуальный compose/config/scripts.
+[ ] Прочитан services.yaml, если затронут shared.
+[ ] Runtime state проверен.
+[ ] Для каждой dependency определён owner.
+[ ] Existing shared services переиспользованы.
+[ ] Shared service не встроен в business project.
+[ ] Нет duplicate model server/broker/n8n.
+[ ] Application содержит только clients/adapters к shared runtime.
+[ ] Stable logical endpoints используются вместо physical model/GPU details.
+[ ] ai-shared подключена только там, где нужна.
+[ ] Project private state остаётся в project network.
+[ ] Host ports публикуются только при необходимости.
+[ ] Volumes имеют понятного owner.
+[ ] Secrets отсутствуют в Git/logs.
 [ ] .env.example отражает новые variables.
-[ ] Healthcheck/lifecycle/log retention определены.
-[ ] GPU parameters остаются env-driven.
-[ ] Для TP проверена topology/benchmark.
+[ ] Health/retry/backpressure semantics определены.
+[ ] GPU parameters остаются deployment configuration.
+[ ] Для TP>1 проверена topology/benchmark.
 [ ] Для embedding migration проверена vector compatibility.
 [ ] docker compose config проходит.
-[ ] Runtime реально проверен после запуска.
-[ ] Есть recreate/migration/reindex/rollback instructions, если нужны.
+[ ] Runtime проверен после запуска.
+[ ] Для migration/reindex/recreate есть явные instructions.
+[ ] Rollback понятен.
+```
+
+---
+
+## 27. Итоговая модель
+
+```text
+                         SHARED INFRASTRUCTURE
+                    owner: shared-infrastructure
+                               │
+          ┌────────────────────┼─────────────────────┐
+          │                    │                     │
+     shared-vlm         shared-embedding         RabbitMQ
+          │                    │                     │
+          ├──────────────┐     │                     │
+          │              │     │                     │
+      Open WebUI        n8n    │                     │
+                         │     │                     │
+                      n8n-db   │                     │
+                    (private)  │                     │
+                               │
+                          ai-shared
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+          Project A        Project B        Project C
+              │                │                │
+         private net       private net       private net
+              │                │                │
+      PostgreSQL/Qdrant  PostgreSQL/...   PostgreSQL/...
+```
+
+Главные правила:
+
+```text
+Reuse shared services.
+Do not embed them into business projects.
+Do not duplicate them without an explicit architecture decision.
+Keep shared lifecycle independent.
+Keep application state isolated.
+Use clients/adapters, not local copies of shared runtimes.
+Use stable logical contracts.
+Keep physical model/GPU placement inside shared deployment configuration.
+Verify runtime before changing infrastructure.
 ```
