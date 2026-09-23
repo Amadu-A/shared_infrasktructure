@@ -23,6 +23,11 @@ services:
       CUDA_DEVICE_ORDER: ${VLLM_CUDA_DEVICE_ORDER:-PCI_BUS_ID}
       CUDA_VISIBLE_DEVICES: ${SHARED_VLM_GPU_DEVICES:-0}
 
+      # Online reproducibility mode.
+      # vLLM must produce the same result for the same request independently
+      # of dynamic batch size/order when the same hardware/runtime is used.
+      VLLM_BATCH_INVARIANT: ${SHARED_VLM_BATCH_INVARIANT:-1}
+
     volumes:
       - huggingface-cache:/root/.cache/huggingface
       - vllm-cache:/root/.cache/vllm
@@ -175,16 +180,12 @@ services:
       WEBUI_URL: "http://${SHARED_PUBLIC_HOST:-localhost}:${OPEN_WEBUI_HOST_PORT:-3000}"
       WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32}
 
-      # Keep deployment configuration authoritative after container recreate.
       ENABLE_PERSISTENT_CONFIG: ${OPEN_WEBUI_ENABLE_PERSISTENT_CONFIG:-false}
 
       ENABLE_OPENAI_API: "true"
       OPENAI_API_BASE_URL: http://shared-vlm:8000/v1
-      # vLLM does not require authentication.
-      # Open WebUI receives a non-secret compatibility value.
       OPENAI_API_KEY: "unused"
 
-      # Explicitly disable Open WebUI's built-in Ollama connector.
       ENABLE_OLLAMA_API: "false"
 
     volumes:
