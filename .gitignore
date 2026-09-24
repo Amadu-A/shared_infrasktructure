@@ -2,6 +2,8 @@
 __pycache__/
 *.py[codz]
 *$py.class
+.env.backup*
+.env.bak*
 
 # C extensions
 *.so
