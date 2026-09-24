@@ -26,7 +26,7 @@ services:
       # Online reproducibility mode.
       # vLLM must produce the same result for the same request independently
       # of dynamic batch size/order when the same hardware/runtime is used.
-      VLLM_BATCH_INVARIANT: ${SHARED_VLM_BATCH_INVARIANT:0}
+      VLLM_BATCH_INVARIANT: ${SHARED_VLM_BATCH_INVARIANT:-0}
 
     volumes:
       - huggingface-cache:/root/.cache/huggingface
