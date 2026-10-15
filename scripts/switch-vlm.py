@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 # scripts/switch-vlm.py
 """Interactive, cache-only switcher for shared-infrastructure's VLM service."""
@@ -36,9 +35,9 @@ MODELS = {
             "--quantization", "moe_wna16",
             "--max-model-len", MAX_MODEL_LEN,
             "--gpu-memory-utilization", "0.90",
-            "--max-num-seqs", "1",
-            "--max-num-queued-reqs", "4",
-            "--max-num-queued-tokens", "16384",
+            "--max-num-seqs", "8",
+            "--max-num-queued-reqs", "48",
+            "--max-num-queued-tokens", "131072",
         ],
     },
     "3": {
@@ -50,9 +49,9 @@ MODELS = {
             "--reasoning-parser", "qwen3",
             "--max-model-len", MAX_MODEL_LEN,
             "--gpu-memory-utilization", "0.90",
-            "--max-num-seqs", "1",
-            "--max-num-queued-reqs", "4",
-            "--max-num-queued-tokens", "8192",
+            "--max-num-seqs", "8",
+            "--max-num-queued-reqs", "48",
+            "--max-num-queued-tokens", "131072",
         ],
     },
 }
@@ -133,7 +132,7 @@ def container_state() -> dict[str, str]:
     if not container_id:
         return {"model": "не запущена", "gpu": "—", "context": "—",
                 "health": "контейнер отсутствует", "tool_parser": "—",
-                "tools_enabled": False}
+                "tools_enabled": False, "command": []}
     data = json.loads(run("docker", "inspect", container_id).stdout)[0]
     cmd = data["Config"].get("Cmd") or []
     env = data["Config"].get("Env") or []
@@ -148,6 +147,7 @@ def container_state() -> dict[str, str]:
         "health": health,
         "tool_parser": value_after(cmd, "--tool-call-parser"),
         "tools_enabled": "--enable-auto-tool-choice" in cmd,
+        "command": cmd,
     }
 
 
@@ -253,6 +253,23 @@ def save_selection(key: str) -> None:
         temporary.replace(OVERRIDE)
 
 
+def matches_model_runtime(command: list[str], selected: dict) -> bool:
+    """Compare the actual container args with the desired model settings."""
+    if value_after(command, "--model") != selected["id"]:
+        return False
+    if value_after(command, "--max-model-len") != MAX_MODEL_LEN:
+        return False
+    if not tool_calling_enabled(command, selected["tool_parser"]):
+        return False
+    if selected["args"] is None:
+        return True
+    expected = selected["args"]
+    for position in range(0, len(expected), 2):
+        if value_after(command, expected[position]) != expected[position + 1]:
+            return False
+    return True
+
+
 def main() -> int:
     assert_safe()
     current = container_state()
@@ -297,18 +314,13 @@ def main() -> int:
     if not cache.get(selected["id"], {}).get("ready"):
         print("Модель не подтверждена как полностью скачанная. Переключение отменено.")
         return 1
-    if (current["model"] == selected["id"]
-            and current["context"] == MAX_MODEL_LEN
-            and current["health"] == "healthy"
-            and current["tools_enabled"]
-            and current["tool_parser"] == selected["tool_parser"]):
+    if (current["health"] == "healthy"
+            and matches_model_runtime(current["command"], selected)):
         effective = json.loads(compose("config", "--format", "json").stdout)
         effective_command = effective["services"]["shared-vlm"]["command"]
-        if (value_after(effective_command, "--model") == selected["id"]
-                and value_after(effective_command, "--max-model-len") == MAX_MODEL_LEN
-                and tool_calling_enabled(effective_command, selected["tool_parser"])):
-            print("Эта модель уже работает с контекстом 262144 и healthy. "
-                  "Ничего не изменено.")
+        if matches_model_runtime(effective_command, selected):
+            print("Модель уже работает с нужным контекстом, параллелизмом "
+                  "и Tool Calling. Ничего не изменено.")
             return 0
     if current["gpu"] not in (GPU_PAIR, "—"):
         print(f"Неожиданная GPU-пара: {current['gpu']}. Переключение отменено.")
