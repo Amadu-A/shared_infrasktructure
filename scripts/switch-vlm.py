@@ -24,11 +24,13 @@ MODELS = {
         "id": "Qwen/Qwen3.8-27B",
         "revision": "main",
         "args": None,
+        "tool_parser": "qwen3_coder",
     },
     "2": {
         "name": "Qwen3.5-122B-A10B-GPTQ-Int4 (тест)",
         "id": "Qwen/Qwen3.5-122B-A10B-GPTQ-Int4",
         "revision": "30cd92cba9707a9aba09d1e490ed4b66b78e9606",
+        "tool_parser": "qwen3_coder",
         "args": [
             "--reasoning-parser", "qwen3",
             "--quantization", "moe_wna16",
@@ -43,6 +45,7 @@ MODELS = {
         "name": "Qwen3-VL-235B-A22B-Instruct-AWQ (тест)",
         "id": "QuantTrio/Qwen3-VL-235B-A22B-Instruct-AWQ",
         "revision": "dc4295875e8a6d61e60a7c4ee6406585d9c70e9c",
+        "tool_parser": None,  # JSON-in-XML; compatible parser not verified.
         "args": [
             "--reasoning-parser", "qwen3",
             "--max-model-len", MAX_MODEL_LEN,
@@ -129,7 +132,8 @@ def container_state() -> dict[str, str]:
     container_id = ps.stdout.strip()
     if not container_id:
         return {"model": "не запущена", "gpu": "—", "context": "—",
-                "health": "контейнер отсутствует"}
+                "health": "контейнер отсутствует", "tool_parser": "—",
+                "tools_enabled": False}
     data = json.loads(run("docker", "inspect", container_id).stdout)[0]
     cmd = data["Config"].get("Cmd") or []
     env = data["Config"].get("Env") or []
@@ -142,6 +146,8 @@ def container_state() -> dict[str, str]:
         "gpu": gpu,
         "context": value_after(cmd, "--max-model-len"),
         "health": health,
+        "tool_parser": value_after(cmd, "--tool-call-parser"),
+        "tools_enabled": "--enable-auto-tool-choice" in cmd,
     }
 
 
@@ -163,7 +169,9 @@ def assert_safe() -> None:
             "Обнаружен сторонний compose.override.yaml; скрипт его не перезапишет."
         )
     if os.environ.get("COMPOSE_FILE"):
-        raise RuntimeError("COMPOSE_FILE задан в окружении; автоматический override может не работать.")
+        raise RuntimeError(
+            "COMPOSE_FILE задан в окружении; автоматический override может не работать."
+        )
     env_path = ROOT / ".env"
     if env_path.is_file() and re.search(
         r"(?m)^\s*(?:export\s+)?COMPOSE_FILE\s*=", env_path.read_text()
@@ -185,9 +193,19 @@ def assert_safe() -> None:
         raise RuntimeError(
             "У исходной 27B в compose.yaml/.env контекст не 262144. Отмена."
         )
+    if not tool_calling_enabled(original["command"], "qwen3_coder"):
+        raise RuntimeError("Основной compose.yaml не содержит Tool Calling для 27B.")
+
+
+def tool_calling_enabled(command: list[str], parser: str) -> bool:
+    return ("--enable-auto-tool-choice" in command
+            and value_after(command, "--tool-call-parser") == parser)
 
 
 def make_override(model: dict) -> str:
+    parser = model["tool_parser"]
+    if parser is None:
+        raise ValueError("Tool Calling parser for this model has not been validated.")
     command = [
         "--model", model["id"],
         "--revision", model["revision"],
@@ -196,6 +214,8 @@ def make_override(model: dict) -> str:
         "--port", "8000",
         "--tensor-parallel-size", "2",
         "--data-parallel-size", "1",
+        "--enable-auto-tool-choice",
+        "--tool-call-parser", parser,
         *model["args"],
     ]
     lines = [
@@ -223,6 +243,8 @@ def print_check_commands() -> None:
 
 
 def save_selection(key: str) -> None:
+    if MODELS[key]["tool_parser"] is None:
+        raise ValueError("Unsupported Tool Calling parser; selection rejected.")
     if key == "1":
         OVERRIDE.unlink(missing_ok=True)
     else:
@@ -237,7 +259,9 @@ def main() -> int:
     print("=== Shared VLM: переключение моделей ===")
     print(f"Текущая модель: {current['model']}")
     print(f"GPU: {current['gpu']}; контекст: {current['context']}; "
-          f"статус: {current['health']}")
+          f"статус: {current['health']}; "
+          f"tool_parser: {current['tool_parser']}; "
+          f"auto_tools: {current['tools_enabled']}")
     print("Проверяю скачанные модели в постоянном Hugging Face cache...")
     cache = check_local_cache()
     print("\n0. Оставить текущую модель")
@@ -246,7 +270,9 @@ def main() -> int:
         state = "скачана" if info.get("ready") else "НЕ подтверждена в cache"
         size = f", веса ~{info['size'] / 1e9:.1f} GB" if info.get("ready") else ""
         active = " [ТЕКУЩИЙ КОНТЕЙНЕР]" if current["model"] == model["id"] else ""
-        print(f"{key}. {model['name']} — {state}{size}{active}")
+        tool_status = (f"tools: {model['tool_parser']}"
+                       if model["tool_parser"] else "tools: НЕТ — выбор заблокирован")
+        print(f"{key}. {model['name']} — {state}{size}{active}; {tool_status}")
 
     listed = {m["id"] for m in MODELS.values()}
     extras = [name for name in cache.get("__cached_repositories__", []) if name not in listed]
@@ -263,16 +289,24 @@ def main() -> int:
         print("Неверный номер. Ничего не изменено.")
         return 1
     selected = MODELS[choice]
+    if selected["tool_parser"] is None:
+        print("Для этой модели парсер Tool Calling не проверен.")
+        print("Шаблон модели отличается от XML-парсера qwen3_coder.")
+        print("Переключение запрещено до отдельного испытания парсера.")
+        return 1
     if not cache.get(selected["id"], {}).get("ready"):
         print("Модель не подтверждена как полностью скачанная. Переключение отменено.")
         return 1
     if (current["model"] == selected["id"]
             and current["context"] == MAX_MODEL_LEN
-            and current["health"] == "healthy"):
+            and current["health"] == "healthy"
+            and current["tools_enabled"]
+            and current["tool_parser"] == selected["tool_parser"]):
         effective = json.loads(compose("config", "--format", "json").stdout)
         effective_command = effective["services"]["shared-vlm"]["command"]
         if (value_after(effective_command, "--model") == selected["id"]
-                and value_after(effective_command, "--max-model-len") == MAX_MODEL_LEN):
+                and value_after(effective_command, "--max-model-len") == MAX_MODEL_LEN
+                and tool_calling_enabled(effective_command, selected["tool_parser"])):
             print("Эта модель уже работает с контекстом 262144 и healthy. "
                   "Ничего не изменено.")
             return 0
@@ -282,7 +316,8 @@ def main() -> int:
 
     print(f"\nВыбрано: {selected['id']}")
     print(f"Режим: GPU {GPU_PAIR}, TP=2, DP=1; "
-          f"контекст={MAX_MODEL_LEN}; API-имя: shared-vlm")
+          f"контекст={MAX_MODEL_LEN}; API-имя: shared-vlm; "
+          f"Tool Calling: {selected['tool_parser']}")
     print("ВНИМАНИЕ: 262144 токена могут не поместиться в GPU KV cache; "
           "vLLM может завершиться с ошибкой при запуске.")
     print("ВНИМАНИЕ: контейнер shared-vlm будет пересоздан; активные запросы прервутся.")

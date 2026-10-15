@@ -1,3 +1,4 @@
+
 # compose.yaml
 
 name: ${COMPOSE_PROJECT_NAME:-shared}
@@ -46,6 +47,9 @@ services:
       - "${SHARED_VLM_MODEL_ALIAS:-shared-vlm}"
       - --reasoning-parser
       - qwen3
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
       - --spec-method
       - mtp
       - --spec-tokens
