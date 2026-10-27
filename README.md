@@ -1,298 +1,444 @@
 <!-- README.md -->
 # shared-infrastructure
 
-Общие сервисы для нескольких независимых проектов и переносимый набор инструкций
-в docs/. Stack содержит shared-vlm, shared-embedding, Open WebUI, n8n с private
-n8n-db и RabbitMQ. PostgreSQL/Qdrant/Redis приложений и их workers остаются
-project-specific. Остановка приложения не должна останавливать shared stack.
+Общая инфраструктура для нескольких независимых приложений на одном Docker-хосте: один сервис нейросети (VLM), отдельный сервис embedding, интерфейс Open WebUI, n8n и RabbitMQ. Здесь же хранятся переносимые инструкции для разработчиков и ИИ-агентов.
 
-## Источники требований
+**Основной принцип:** инфраструктурные сервисы используются несколькими проектами, но данные, базы, фоновые задачи и жизненный цикл каждого приложения остаются самостоятельными. Остановка приложения не должна останавливать `shared-infrastructure`.
 
-| Область | Источник |
-|---|---|
-| Порядок чтения | [LLM_CONTEXT](docs/LLM_CONTEXT.md) |
-| Общая инженерная практика | [Engineering](docs/ENGINEERING_GUIDELINES.md) |
-| Frontend и единый checklist | [Frontend](docs/FRONTEND_GUIDELINES.md) |
-| Ownership, lifecycle, смена модели, единый DoD | [Infrastructure](docs/INFRASTRUCTURE_INSTRUCTIONS.md) |
-| Intended API/topology | [services.yaml](docs/services.yaml) |
-| Решения именно для этого deployment | [Architecture decisions](docs/ARCHITECTURE_DECISIONS.md) |
-| Контейнеры и допустимые defaults | compose.yaml |
-| Каталог переменных без секретов | .env.example |
-| Изменяемые deployment-параметры и секреты | серверный .env |
+> **Совместимость версий.** Этот README описывает **целевую согласованную конфигурацию после принятия изменений Codex**. На проверенном GitHub `main` (`8b04d08`) ещё нет `scripts/deployment.py` и `requirements-dev.txt`. До их появления команды, использующие эти файлы, выполнять нельзя. Окончательное соответствие README фактическому коду проверяется перед коммитом и развёртыванием. В частности, прежний `scripts/switch-vlm.py` ещё умел изменять override; это поведение должно быть убрано **в коде**, а не только в README.
 
-services.yaml и Compose не доказывают, что сервис сейчас работает.
-PROJECT_INTEGRATION.md и SERVICES.md — указатели, а не отдельные наборы правил.
-Для нового application project достаточно пяти файлов переносимого docs/ bundle;
-project-specific Architecture decisions относятся к оператору этого stack.
-Frontend Guidelines читаются полностью, когда текущая задача затрагивает frontend.
+## 1. Самое необходимое
 
-## Конфигурация
+Рабочий каталог Linux-сервера:
 
-Единый приоритет:
+```bash
+cd /projects/shared-infrastructure
+```
 
-    окружение команды > серверный .env > разрешённый default Compose
+После **однократной настройки `.env`** и установки зависимостей для тестов:
 
-На Linux временное значение передаётся так:
+**Одна команда для первоначального запуска стека:**
 
-    SHARED_VLM_HOST_PORT=8111 docker compose --profile ai-vlm config --quiet
-    SHARED_VLM_HOST_PORT=8111 ./scripts/bootstrap.sh --profile ai-vlm --check-only
-    SHARED_VLM_HOST_PORT=8111 ./scripts/check.sh --profile ai-vlm
+```bash
+python3 scripts/deployment.py validate && bash scripts/bootstrap.sh && docker compose up -d
+```
 
-Во всех трёх случаях применяется один порт. В PowerShell переменная задаётся
-через $env:SHARED_VLM_HOST_PORT перед командой; после проверки её нужно вернуть
-в прежнее состояние, если она уже существовала.
+**Одна команда для полного чека с тестами (ничего не пересоздаёт):**
 
-Скрипты не исполняют .env через shell и не реализуют отдельный dotenv-парсер.
-scripts/deployment.py читает итоговый docker compose config --format json в памяти,
-не печатая секреты. Переданный --env-file/--profile используется одинаково всеми
-проверками. COMPOSE_PROFILES из окружения/.env разрешает сам Compose.
+```bash
+.venv/bin/python -B -m pytest -p no:cacheprovider -q && python3 scripts/deployment.py validate && bash scripts/bootstrap.sh --check-only && python3 scripts/deployment.py compare-runtime && bash scripts/check.sh
+```
 
-.env.example — каталог, не runtime env-файл. Серверный .env остаётся sparse:
-реальные секреты, обязательные параметры и отличия от допустимых defaults.
-Копировать весь каталог не требуется; удалять переменные по устаревшему названию
-запрещено без проверки фактических обращений.
+Вторая команда предназначена для Linux после установки тестовых зависимостей и запуска требуемых сервисов. Если какой-либо обязательный сервис ещё загружается, проверку повторяют после его готовности. На Windows используются `python -m pytest` и аналогичные проверки кода, но Docker/runtime-проверки выполняются на Linux.
 
-Для базового stack обязательны настоящие N8N_DB_PASSWORD, N8N_ENCRYPTION_KEY,
-RABBITMQ_DEFAULT_PASS. SHARED_PUBLIC_HOST задаёт объявляемый клиентам IP/DNS;
-при доступе с других машин он должен быть настроен на реальный адрес сервера.
-Он отличается от bind IP.
+**Внимание:** команда запуска — **для первоначального развёртывания или согласованного применения изменений**. На работающем сервере `docker compose up -d` может пересоздать контейнеры, конфигурация которых изменилась. Для повседневной диагностики используйте команду чека, а не повторный запуск.
 
-Для VLM обязательны явно заданные SHARED_VLM_TP_SIZE, SHARED_VLM_DP_SIZE и
-SHARED_VLM_MAX_MODEL_LEN. Их значения берутся из принятой серверной конфигурации:
-ни каталог, ни переключатель не выбирают их вместо владельца. Проверка Docker
-entrypoint отказывает до запуска модели при отсутствии обязательных параметров.
-Для других обычных non-secret настроек допускаются документированные defaults.
+## 2. Архитектура
 
-Подтверждённая модель — Qwen/Qwen3.8-27B. Размещение VLM — GPU 2,3; embedding —
-GPU 1. Изменение этого размещения требует нового решения владельца.
-MODEL_REVISION=main допустим для оценки, но не доказывает неизменность весов.
-Перед переключением с возможностью точного rollback нужна принятая exact revision;
-скрипт не закрепляет её автоматически.
+```text
+                         Сервер aistation
+ ┌───────────────────────────────────────────────────────────┐
+ │                      shared-infrastructure                │
+ │                                                           │
+ │  shared-vlm         shared-embedding        Open WebUI     │
+ │  vLLM, GPU 2,3      vLLM, GPU 1             веб-чат      │
+ │       │                    │                     │        │
+ │       └────────────────────┼─────────────────────┘        │
+ │                            │                              │
+ │  n8n ───── n8n-db          │            RabbitMQ          │
+ │  │          (закрытая БД   │               │              │
+ │  │           только n8n)   │               │              │
+ └──┼─────────────────────────┼───────────────┼──────────────┘
+    │                         │               │
+    └──────────────── ai-shared ───────────────┘
+                              │
+                ┌─────────────┴──────────────┐
+                │                            │
+           PDRD-validation              другие проекты
+           contract-diff-search         OpenClaw-клиенты
+                │                            │
+         private network              private network
+                │                            │
+         свои PostgreSQL,             свои данные, Redis,
+         Redis, workers                Qdrant, workers
+```
 
-SHARED_VLM_MODEL_ARGS содержит дополнительные модельные flags. Существующие
-reasoning, tools и MTP оставлены в default; совместимость нового набора проверяется
-оператором. Нельзя повторять в MODEL_ARGS model/revision/alias/GPU/TP/DP/context
-или добавлять API-key authentication.
+Это логическая схема. Фактические контейнеры, сети, GPU и опубликованные порты всегда проверяются на сервере: документация сама по себе не подтверждает работающий runtime.
 
-OPEN_WEBUI_SECRET_KEY обязателен только для выбранного/запускаемого UI.
-Пустой ключ и CHANGE_ME отклоняются до запуска приложения. Остальной stack
-может работать без UI и его ключа. Существующий ключ автоматически не меняется.
-Новый entrypoint сохраняет штатный запуск bash /app/backend/start.sh образа
-open-webui v0.11.3:
-https://github.com/open-webui/open-webui/blob/v0.11.3/Dockerfile
+### Что является общим
 
-Inference endpoints не требуют application API keys. Существующее unused внутри
-Open WebUI — техническое значение клиента, не credential и не способ защиты.
-HF_TOKEN нужен только для gated/private моделей и не передаётся приложениям.
+| Сервис | Назначение | Docker-имя внутри сети | Обычный порт хоста |
+|---|---|---|---|
+| `shared-vlm` | Текст, изображения, Tool Calling, reasoning | `http://shared-vlm:8000/v1` | 8000 |
+| `shared-embedding` | Векторное представление текста/изображений | `http://shared-embedding:8000/v1` | 8001 |
+| `open-webui` | Чат с общей моделью | `http://open-webui:8080` | 3000 |
+| `n8n` | Общие workflow автоматизации | `http://n8n:5678` | 5678 |
+| `rabbitmq` | Очереди сообщений проектов | `rabbitmq:5672` | 5672; панель 15672 |
+| `n8n-db` | PostgreSQL исключительно для n8n | `n8n-db:5432` | **Не публикуется** |
 
-## Требования и первый запуск Linux
+`shared-vlm` и `shared-embedding` — **логические имена**. Приложения всегда обращаются к `model=shared-vlm` и `model=shared-embedding`, а не к физическим именам моделей Hugging Face.
 
-Нужны Docker Compose с поддержкой gpus, Python 3.12+, а для выбранных inference
-profiles — NVIDIA Container Toolkit и доступные GPU. Сначала проверить Docker,
-GPU, порты и firewall. Сетевые манифесты сохраняют прежние имена ai-shared и
-n8n-internal. Порядок создания пользователей RabbitMQ этим комплектом не меняется.
+### Что НЕ входит в общий стек
 
-    docker --version
-    docker compose version
-    docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-    docker network ls
-    sudo ss -lntp
-    nvidia-smi
+Отдельные приложения самостоятельно разворачивают собственные API, frontend, PostgreSQL, Redis, Qdrant, workers/Celery и хранилища документов, если иное не утверждено отдельно. В особенности **нельзя** подключать приложение к `n8n-db` вместо собственной базы.
 
-Последняя команда нужна для GPU deployment. Выбор AI выполняется через
-COMPOSE_PROFILES=ai-vlm,ai-embedding,ai-ui либо соответствующие --profile.
-При ai-ui требуется также ai-vlm.
+## 3. Структура репозитория
 
-После подготовки закрытого .env:
+```text
+shared_infrasktructure/
+├── compose.yaml                         # единственный штатный Compose проекта
+├── .env.example                         # каталог переменных; не секреты
+├── .env                                 # серверные значения и секреты, вне Git
+├── .gitignore
+├── README.md                             # этот практический путеводитель
+├── PROJECT_INTEGRATION.md               # краткий указатель для новых проектов
+├── SERVICES.md                          # краткий каталог сервисов
+├── requirements-dev.txt                 # тестовые зависимости (обновлённая версия)
+├── docs/
+│   ├── LLM_CONTEXT.md                   # точка входа для ИИ-разработчика
+│   ├── ENGINEERING_GUIDELINES.md        # Python, архитектура, тесты, логи
+│   ├── FRONTEND_GUIDELINES.md           # frontend и единый checklist
+│   ├── INFRASTRUCTURE_INSTRUCTIONS.md   # нормативные правила инфраструктуры
+│   ├── services.yaml                    # контракты и топология сервисов
+│   └── ARCHITECTURE_DECISIONS.md        # утверждённые решения владельца
+├── scripts/
+│   ├── bootstrap.sh                     # проверка подготовки, создание внешней сети
+│   ├── check.sh                         # здоровье запущенных сервисов
+│   ├── deployment.py                    # безопасная проверка конфигурации/runtime
+│   ├── switch-vlm.py                    # просмотр моделей и подсказки (ТОЛЬКО чтение)
+│   ├── check-vlm-tool-calling.py        # функциональная проверка инструментов VLM
+│   └── check-shared-contracts.py        # контрактные проверки (если принят в код)
+├── tests/                               # автоматические тесты проекта
+└── .github/workflows/                   # CI-проверки (если приняты в код)
+```
 
-    python3 scripts/deployment.py validate
-    bash scripts/bootstrap.sh --check-only
+Дерево отражает **целевой состав обновлённого проекта**. Не используйте команды из файла, которого нет в вашей ветке. Имена папок/файлов после принятия изменений сверяются с фактическим `git ls-files`.
 
-Отсутствующую внешнюю сеть режим --check-only не создаёт. Только при первом
-запуске оператор может выполнить обычный bootstrap, который создаст указанную
-в Compose сеть после успешной валидации:
+## 4. Docker-сети и подключение приложения
 
-    bash scripts/bootstrap.sh
-    docker compose pull
-    docker compose up -d
-    bash scripts/check.sh
+У проекта две сети с разными задачами:
 
-Это команды первого запуска, не команда применения текущего исправления.
-Bootstrap не запускает и не пересоздаёт контейнеры. При ошибке обязательных
-настроек он завершается до создания сети. config --quiet проверяет структуру,
-но не заменяет семантическую проверку deployment.py validate.
+- **`ai-shared`** — общая внешняя Docker-сеть для разрешённых клиентов `shared-vlm`, embedding, n8n и RabbitMQ. Её имя фиксировано как `ai-shared` (при обычном развёртывании).
+- **`n8n-internal`** — закрытая внутренняя сеть n8n и его PostgreSQL. Чужие приложения к ней не подключаются. Docker Compose может добавить к фактическому имени сети префикс проекта.
 
-## Shared contracts и доступ
+Каждый новый проект сохраняет **свою приватную сеть** для базы данных и других внутренних компонентов.
 
-| Service | Docker DNS / internal | Default host port |
+### Пример Compose для нового приложения на том же сервере
+
+```yaml
+# compose.yaml (пример для отдельного приложения)
+services:
+  api:
+    build: .
+    networks:
+      - default
+      - ai-shared
+    environment:
+      SHARED_VLM_BASE_URL: http://shared-vlm:8000/v1
+      SHARED_VLM_MODEL: shared-vlm
+      SHARED_EMBEDDING_BASE_URL: http://shared-embedding:8000/v1
+      SHARED_EMBEDDING_MODEL: shared-embedding
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+
+  postgres:
+    image: postgres:16-alpine
+    networks:
+      - default
+    # Credentials, volumes и настройки БД задаются в отдельном проекте.
+
+networks:
+  ai-shared:
+    external: true
+    name: ai-shared
+```
+
+Пример — **схема подключения**, не готовое приложение: не хватает Dockerfile, учётных данных собственной БД и остальной конфигурации конкретного проекта. Не публикуйте PostgreSQL в `ai-shared` без необходимости.
+
+### Если приложение находится на другом компьютере
+
+Docker-имя `shared-vlm` за пределами общей Docker-сети не работает. Используйте доступный из доверенной LAN/VPN адрес сервера и опубликованный порт, например:
+
+```text
+http://192.168.55.3:8000/v1   # shared-vlm
+http://192.168.55.3:8001/v1   # shared-embedding
+http://192.168.55.3:3000      # Open WebUI
+```
+
+`192.168.55.3` — адрес из ранее проверенной конфигурации, **не универсальный адрес**. Если сервер получил другой IP/DNS, замените его. Доступ к опубликованным портам нужно ограничить firewall; отсутствие API-ключа у inference API не означает, что его можно открывать в Интернет.
+
+## 5. Настройка `.env`: что записать и зачем
+
+`.env.example` — справочник доступных переменных, **Docker автоматически не загружает его как настройки**. Настоящие секреты и реальные значения указываются в закрытом `.env` рядом с `compose.yaml`.
+
+**Правило выбора значений:** значение, переданное команде запуска, важнее `.env`; `.env` важнее разрешённых defaults в Compose. Например, `SHARED_VLM_HOST_PORT=8111 docker compose config` использует 8111 только для этой команды. Скрипты проверки должны учитывать те же эффективные значения, что и Docker.
+
+### 5.1. Пример `.env` для нашей текущей конфигурации
+
+Это **образец для понимания**, а не команда переписать существующий `.env`. Значения ключей указаны только как места для настоящих секретов.
+
+```dotenv
+# Используемые сервисы; убрать ai-ui, если Open WebUI не требуется.
+COMPOSE_PROFILES=ai-vlm,ai-embedding,ai-ui
+
+# Адрес сервера для клиентов из доверенной локальной сети/VPN.
+SHARED_PUBLIC_HOST=192.168.55.3
+
+# Исходные учётные данные существующих n8n / RabbitMQ НЕ менять.
+N8N_DB_PASSWORD=ВСТАВЬТЕ_СУЩЕСТВУЮЩИЙ_СЕКРЕТ
+N8N_ENCRYPTION_KEY=ВСТАВЬТЕ_СУЩЕСТВУЮЩИЙ_СЕКРЕТ
+RABBITMQ_DEFAULT_PASS=ВСТАВЬТЕ_СУЩЕСТВУЮЩИЙ_СЕКРЕТ
+
+# Нужен только при включённом ai-ui.
+OPEN_WEBUI_SECRET_KEY=ВСТАВЬТЕ_СУЩЕСТВУЮЩИЙ_СЕКРЕТ
+
+# Принятая текущая модель VLM.
+SHARED_VLM_MODEL_ID=Qwen/Qwen3.8-27B
+SHARED_VLM_MODEL_REVISION=main
+SHARED_VLM_GPU_DEVICES=2,3
+SHARED_VLM_TP_SIZE=2
+SHARED_VLM_DP_SIZE=1
+SHARED_VLM_MAX_MODEL_LEN=262144
+SHARED_VLM_MAX_NUM_SEQS=8
+SHARED_VLM_MAX_NUM_QUEUED_REQS=48
+SHARED_VLM_MAX_NUM_QUEUED_TOKENS=131072
+SHARED_VLM_GPU_MEMORY_UTILIZATION=0.90
+SHARED_VLM_BATCH_INVARIANT=0
+
+# Shared multimodal embedding — отдельная GPU 1.
+SHARED_EMBEDDING_MODEL_ID=Qwen/Qwen3-VL-Embedding-8B
+SHARED_EMBEDDING_MODEL_REVISION=main
+SHARED_EMBEDDING_GPU_DEVICES=1
+SHARED_EMBEDDING_TP_SIZE=1
+SHARED_EMBEDDING_DP_SIZE=1
+
+# Часовой пояс workflow n8n.
+TIMEZONE=Europe/Vilnius
+```
+
+> `TIMEZONE=Europe/Vilnius` — **пример**, а не подтверждённая настройка вашего n8n: оставьте фактический согласованный часовой пояс. Точные версии весов, порты, bind IP и другие значения оставляйте прежними, если для них не принято отдельное изменение. `main` у модели может со временем указывать на другую ревизию; для воспроизводимого rollback нужен утверждённый точный commit SHA Hugging Face.
+
+### 5.2. Обязательные или значимые переменные
+
+| Переменная | Что означает | Когда задавать |
 |---|---|---|
-| shared-vlm | http://shared-vlm:8000/v1 | 8000 |
-| shared-embedding | http://shared-embedding:8000/v1; также /pooling на корне | 8001 |
-| open-webui | http://open-webui:8080 | 3000 |
-| n8n | http://n8n:5678 | 5678 |
-| rabbitmq | rabbitmq:5672; Management :15672 | 5672 / 15672 |
-| n8n-db | n8n-db:5432, только private network n8n | не публикуется |
+| `COMPOSE_PROFILES` | Какие дополнительные части включены (`ai-vlm`, `ai-embedding`, `ai-ui`) | При выборе набора сервисов |
+| `SHARED_PUBLIC_HOST` | IP или DNS сервера, который сообщаем клиентам | Для доступа с других машин; без `http://` и порта |
+| `N8N_DB_PASSWORD` | Пароль PostgreSQL n8n | Обязательно для n8n; на работающей БД не заменять произвольно |
+| `N8N_ENCRYPTION_KEY` | Ключ шифрования секретов, сохранённых в n8n | Обязательно; при потере/замене ранее зашифрованные credentials могут стать недоступны |
+| `RABBITMQ_DEFAULT_PASS` | Начальный пароль учётной записи RabbitMQ | Обязательно; замена в `.env` не является процедурой смены пароля работающего брокера |
+| `OPEN_WEBUI_SECRET_KEY` | Секрет сессий/авторизации Open WebUI | **Только при включённом UI**; нельзя использовать пустой или `CHANGE_ME` |
+| `SHARED_VLM_MODEL_ID` | Физическая модель Hugging Face | Когда включён `ai-vlm` |
+| `SHARED_VLM_MODEL_REVISION` | Ревизия весов модели | Когда включён `ai-vlm` |
+| `SHARED_VLM_GPU_DEVICES` | Номера GPU, обслуживающих VLM | Когда включён `ai-vlm`; у нас `2,3` |
+| `SHARED_VLM_TP_SIZE` | Сколько GPU совместно обслуживают один экземпляр модели | Для VLM; у нас `2` |
+| `SHARED_VLM_DP_SIZE` | Сколько независимых экземпляров модели планируется | Для VLM; у нас `1` |
+| `SHARED_VLM_MAX_MODEL_LEN` | Максимальный контекст, заявляемый vLLM | Для VLM; у нас `262144`, требуется запас VRAM |
+| `SHARED_EMBEDDING_MODEL_ID` | Модель embedding | Когда включён `ai-embedding` |
+| `SHARED_EMBEDDING_MODEL_REVISION` | Ревизия embedding | Когда включён `ai-embedding` |
+| `SHARED_EMBEDDING_GPU_DEVICES` | GPU embedding | Когда включён `ai-embedding`; у нас `1` |
+| `SHARED_EMBEDDING_TP_SIZE`, `SHARED_EMBEDDING_DP_SIZE` | Параллелизм embedding | У нас `1` и `1` |
 
-Logical aliases: shared-vlm и shared-embedding. Physical model/revision,
-GPU/TP/DP/context не должны попадать в business code. На том же host application
-использует external ai-shared и Docker DNS; на другом разрешённом host —
-SHARED_PUBLIC_HOST и published port. Application database остаётся в private
-project network. Published bind default — 0.0.0.0; доступ разрешён только из
-согласованных LAN/VPN источников и ограничивается host firewall.
+### 5.3. Настройки производительности VLM
 
-n8n-db принадлежит исключительно n8n. n8n workflows используют project namespace
-вроде [PDRD] и [CONTRACT]. RabbitMQ сохраняет существующий порядок регистрации:
-предпочтительно отдельные vhost и application user на проект; bootstrap admin
-не используется приложениями. Новые команды регистрации здесь не вводятся.
+| Переменная | Что регулирует | Наша текущая базовая настройка |
+|---|---|---|
+| `SHARED_VLM_MAX_NUM_SEQS` | Верхняя граница одновременно обрабатываемых последовательностей | `8` |
+| `SHARED_VLM_MAX_NUM_QUEUED_REQS` | Допустимое число ожидающих запросов в планировщике | `48` |
+| `SHARED_VLM_MAX_NUM_QUEUED_TOKENS` | Лимит токенов очереди (если поддерживается этой версией vLLM) | `131072` |
+| `SHARED_VLM_GPU_MEMORY_UTILIZATION` | Доля VRAM, выделяемая vLLM | `0.90` |
+| `SHARED_VLM_BATCH_INVARIANT` | Запрос специального режима стабильности результатов между batch, где поддерживается | `0` |
+| `SHARED_VLM_MODEL_ARGS` | Дополнительные CLI-флаги модели **только в обновлённой реализации**, если они поддержаны Compose | Не копировать вслепую; проверить фактический Compose и совместимость модели |
 
-## Проверки без изменения deployment
+Ни `TP=2/DP=1`, ни контекст `262144` не должны быть навечно зашиты в переключатель: они выбираются владельцем deployment и проверяются перед запуском. Количество одновременно работающих запросов не равно числу копий модели.
 
-    docker compose config --quiet
-    python3 scripts/deployment.py validate
-    bash scripts/bootstrap.sh --check-only
-    python3 scripts/deployment.py compare-runtime
-    bash scripts/check.sh
+### 5.4. Адреса, порты, версии и необязательные настройки
 
-Те же --profile/--env-file нужно передавать всей последовательности, если они
-переданы команде запуска. Если значения окружения были временными, следующая
-команда в другом окружении проверит другую конфигурацию — сохраняйте их одинаковыми.
+| Переменная | Значение по умолчанию в проверенном Compose | Назначение |
+|---|---|---|
+| `COMPOSE_PROJECT_NAME` | `shared` | Имя Docker Compose-проекта |
+| `SHARED_NETWORK_NAME` | `ai-shared` | Имя внешней общей сети |
+| `SHARED_VLM_HOST_PORT` | `8000` | Порт VLM на сервере |
+| `SHARED_EMBEDDING_HOST_PORT` | `8001` | Порт embedding |
+| `OPEN_WEBUI_HOST_PORT` | `3000` | Порт веб-интерфейса |
+| `N8N_HOST_PORT` | `5678` | Порт n8n |
+| `RABBITMQ_AMQP_HOST_PORT` | `5672` | Порт обмена сообщениями |
+| `RABBITMQ_MANAGEMENT_HOST_PORT` | `15672` | Порт панели RabbitMQ |
+| `SHARED_VLM_BIND_IP`, `SHARED_EMBEDDING_BIND_IP`, `OPEN_WEBUI_BIND_IP`, `N8N_BIND_IP`, `RABBITMQ_BIND_IP` | `0.0.0.0` | На каких сетевых адресах хоста слушать каждый порт; **не удалять ограничение конкретным IP без проверки firewall** |
+| `TIMEZONE` | `UTC` | Часовой пояс n8n |
+| `N8N_DB_NAME`, `N8N_DB_USER` | `n8n`, `n8n` | Имя базы и пользователя n8n |
+| `RABBITMQ_DEFAULT_USER` | `shared_admin` | Начальный администратор RabbitMQ; приложения используют отдельные учётные записи |
+| `OPEN_WEBUI_NAME` | `Shared AI` | Заголовок веб-интерфейса |
+| `OPEN_WEBUI_ENABLE_PERSISTENT_CONFIG` | `false` | Использование постоянной конфигурации настроек UI |
+| `SHARED_VLM_MODEL_ALIAS` | `shared-vlm` | Логическое имя VLM, используемое приложениями; обычно не менять |
+| `SHARED_EMBEDDING_MODEL_ALIAS` | `shared-embedding` | Логическое имя embedding, используемое приложениями; обычно не менять |
+| `VLLM_IMAGE` | `vllm/vllm-openai:v0.29.0` | Версия контейнера vLLM (VLM и embedding) |
+| `VLLM_CUDA_DEVICE_ORDER` | `PCI_BUS_ID` | Порядок нумерации GPU |
+| `OPEN_WEBUI_IMAGE` | `ghcr.io/open-webui/open-webui:v0.11.3` | Версия Open WebUI |
+| `N8N_IMAGE` | `docker.n8n.io/n8nio/n8n:2.34.5` | Версия n8n |
+| `N8N_POSTGRES_IMAGE` | `postgres:16-alpine` | PostgreSQL n8n |
+| `RABBITMQ_IMAGE` | `rabbitmq:4.1-management` | RabbitMQ |
+| `HF_TOKEN` | пустой | Только для gated/private моделей Hugging Face; никому не публиковать |
+| `SHARED_LOG_MAX_SIZE`, `SHARED_LOG_MAX_FILE` | `10m`, `5` — в проектируемой обновлённой версии | Ограничения размера и количества Docker-журналов, **только если такие переменные реализованы в Compose** |
 
-check требует ожидаемые сервисы, а также проверяет уже работающие AI-сервисы
-данного Compose-проекта. Отключённый отсутствующий AI допустим; включённый
-отсутствующий/неhealthy сервис — ошибка. Без GPU-сервисов NVIDIA не требуется.
-Проверяются alias, endpoint, параметры AI и конечные логи. Расхождение runtime
-не исправляется автоматически.
+У embedding отдельно доступны `SHARED_EMBEDDING_MAX_MODEL_LEN`, `SHARED_EMBEDDING_GPU_MEMORY_UTILIZATION`, `SHARED_EMBEDDING_MAX_NUM_SEQS`, `SHARED_EMBEDDING_MAX_NUM_QUEUED_REQS` и `SHARED_EMBEDDING_MAX_NUM_QUEUED_TOKENS`. Их фактические значения сохраняйте при обновлении; полные допустимые настройки сверяйте с текущими `.env.example` и `compose.yaml`.
 
-## Смена VLM и rollback
+Переменные из удалённой Ollama-конфигурации (включая `OLLAMA_*` и устаревшую `SHARED_BIND_IP`) не требуются этому Compose. Не удаляйте переменные других проектов только потому, что они похожи по имени.
 
-Нормативный порядок:
-[Infrastructure §9](docs/INFRASTRUCTURE_INSTRUCTIONS.md#9-gpu-и-hardware-portability).
+### 5.5. Как создать новые секреты
 
-Сначала read-only:
+**Только при первой установке или согласованной замене секрета.** Для каждого нового пароля/ключа сгенерируйте **разное значение**:
 
-    python3 scripts/switch-vlm.py --dry-run
+```bash
+openssl rand -hex 32
+```
 
-Переключатель требует существующий здоровый VLM и согласованность его параметров
-с Compose. Выбор 0/пустой ответ ничего не пишет. Пункт основной 27B сохраняет
-её текущий полный профиль и exact revision; он не подбирает параметры возврата
-по параметрам тестовой модели.
+Команда создаёт 64 случайных шестнадцатеричных символа. Выполните её отдельно для `N8N_DB_PASSWORD`, `N8N_ENCRYPTION_KEY`, `RABBITMQ_DEFAULT_PASS`, а при включённом Open WebUI — также для `OPEN_WEBUI_SECRET_KEY`. Результат вставляется после `=` в закрытый `.env`; команды и значения секретов **не коммитятся**.
 
-Legacy override прежнего переключателя переносится отдельно:
+Для нового `.env` ограничьте права доступа:
 
-    python3 scripts/switch-vlm.py --migrate-current --dry-run
-    python3 scripts/switch-vlm.py --migrate-current
+```bash
+chmod 600 .env
+```
 
-Вторая команда запрашивает YES, переносит полный набор VLM-параметров в .env,
-архивирует owned override и доказывает эквивалентность всего Compose. Recreate
-не выполняется. Чужой override, COMPOSE_FILE или параллельная запись блокируют
-операцию. Архив/backup сохраняются рядом с .env с именем .env.bak-*, не в Git.
+**Критично при существующем deployment:** не генерируйте вместо действующих новые `N8N_ENCRYPTION_KEY`, `N8N_DB_PASSWORD`, RabbitMQ password или `OPEN_WEBUI_SECRET_KEY`. Это может нарушить доступ к данным, сохранённым учётным данным или активным сеансам. Сначала сохраните существующие секреты в защищённой резервной копии.
 
-Эксплуатационное переключение запускается отдельно:
+## 6. Установка перед первым запуском
 
-    python3 scripts/switch-vlm.py
+### Требования
 
-Тестовый каталог не является доказательством совместимости модели. Для выбора
-экспериментального профиля дополнительно требуется --approved-model с полным
-model ID после отдельного утверждения владельцем сохранения modality/tools и
-результатов испытания. Непроверенный parser остаётся заблокированным.
+- Docker Engine + Docker Compose с поддержкой GPU;
+- NVIDIA driver, NVIDIA Container Toolkit и доступные GPU для выбранных AI-профилей;
+- Python версии, поддерживаемой текущим кодом (для обновлённой версии — Python 3.12+);
+- `openssl` для генерации секретов;
+- свободное место для Hugging Face cache, Docker volumes и журналов;
+- настроенный firewall для опубликованных портов.
 
-После явного YES допускается recreate только shared-vlm с --no-deps. Активные
-запросы прерываются. Веса не скачиваются и не удаляются. Точные прежние параметры
-сохраняются в закрытом backup. При ошибке конфигурации файл возвращается без
-recreate; после начатого recreate выполняется возврат прежнего VLM и проверки
-health/text/vision/tools. Если rollback не подтверждён, требуется ручная проверка.
+### Подготовка
 
-Для ручного rollback оператор выбирает нужный закрытый .env.bak-* и возвращает
-согласованную пару кода/конфигурации. Нельзя слепо восстанавливать старый полный
-.env поверх новых секретов: сначала проверить локально, какие несвязанные
-параметры менялись. Пример атомарного восстановления при отсутствии таких изменений:
+1. Клонировать проект и перейти в каталог; на работающем сервере используйте существующий checkout, а не создавайте новый.
+2. Создать `.env` **вручную**, пользуясь таблицами выше. Не копировать весь `.env.example`, если значения совпадают с defaults.
+3. Подготовить тестовое Python-окружение один раз:
 
-    cp -p -- .env.bak-APPROVED_BACKUP .env.bak-restore
-    mv -- .env.bak-restore .env
-    python3 scripts/deployment.py validate --profile ai-vlm
-    docker compose --profile ai-vlm up -d --no-deps --force-recreate shared-vlm
-    python3 scripts/deployment.py compare-runtime --profile ai-vlm
-    bash scripts/check.sh --profile ai-vlm
+```bash
+python3 -m venv .venv && .venv/bin/python -m pip install -r requirements-dev.txt
+```
 
-Перед операторским rollback убедиться, что process environment не перекрывает
-восстанавливаемые значения. Старый owned override восстанавливается из архива
-только при возврате к соответствующей прежней версии кода/конфигурации.
-Обычный docker compose restart изменённые параметры не применяет.
+4. Проверить доступность Docker и GPU:
 
-## Приёмка и одновременная нагрузка
+```bash
+docker --version
+docker compose version
+nvidia-smi
+```
 
-Пример для фактических опубликованных адресов, base URL содержит /v1:
+5. До запуска проверить конфигурацию без изменения контейнеров:
 
-    python3 scripts/check-vlm-tool-calling.py --url "$vlm_base_url"
-    python3 scripts/check-shared-contracts.py --vlm-url "$vlm_base_url" --embedding-url "$embedding_base_url"
+```bash
+python3 scripts/deployment.py validate
+```
 
-Второй скрипт отправляет три одновременных synthetic VLM-запроса и embedding.
-При известной принятой размерности передать --embedding-dimension.
-Он не заменяет настоящие проверки PDRD-validation, OpenClaw и Open WebUI.
-Проверить их одновременно, отсутствие OOM, неожиданных 5xx и голодания клиентов.
-MTP/throughput/latency сравниваются с принятой baseline по метрикам и клиентским
-сценариям; HTTP 200 не является доказательством сохранения производительности.
+Эта команда требует соответствующего файла в обновлённой версии проекта.
 
-Embedding model/revision/dimension/preprocessing не меняются этим исправлением.
-Если они меняются позже — нужен compatibility check существующих индексов и,
-при несовместимости, отдельный controlled migration/reindex.
+### Первый запуск — одна команда
 
-## Логи и безопасное обновление
+Из корня репозитория после подготовки `.env`:
 
-Для всех шести сервисов согласован local driver, max-size=10m, max-file=5.
-Каталог SHARED_LOG_MAX_SIZE/SHARED_LOG_MAX_FILE позволяет согласованные overrides.
-Текущие контейнеры не меняют driver от Git pull: нужны отдельные целевые recreate.
-check обнаруживает контейнеры без подтверждённых конечных ограничений.
+```bash
+python3 scripts/deployment.py validate && bash scripts/bootstrap.sh && docker compose up -d
+```
 
-Перед применением entrypoint/logging изменений сравнить текущий runtime и
-подготовить закрытые backups. Применять по сервисам в согласованные окна.
-Для n8n-db требуется проверенная процедура backup/restore и окно n8n.
-Общий up --remove-orphans или force-recreate всего stack не использовать.
-Recreate только одобренного сервиса:
+Первый `bootstrap.sh` может создать отсутствующую сеть `ai-shared` после проверок. Он не должен автоматически менять модель. Compose запускает только сервисы выбранных профилей плюс сервисы без профилей. Если включён `ai-ui`, должен быть включён и `ai-vlm`, а также задан ключ UI.
 
-    docker compose up -d --no-deps --force-recreate APPROVED_SERVICE
+**Для работающего production** эта команда не предназначена для безусловного повторения: сначала сравните будущую конфигурацию с текущей, проверьте backup и запланируйте пересоздание конкретного сервиса.
 
-Изменение image — отдельная проверка совместимости; tags на latest не менять.
-Docker обслуживает собственные log files; активные файлы из /var/lib/docker
-вручную не удалять. Ротация ограничивает размер; удалённые старые логи обычным
-rollback не восстановить.
+## 7. Одна команда для полного чека и тестов
 
-Deployment запрещён при неизвестном override, несовпадении runtime, отсутствии
-обязательных параметров/backup, падении тестов или нерешённом архитектурном вопросе.
-Установка данного коммита не является подтверждением переключения модели.
+После установки тестовых зависимостей и запуска стека:
 
-## Тесты Windows и Linux
+```bash
+.venv/bin/python -B -m pytest -p no:cacheprovider -q && python3 scripts/deployment.py validate && bash scripts/bootstrap.sh --check-only && python3 scripts/deployment.py compare-runtime && bash scripts/check.sh
+```
 
-Python 3.12+:
+Команда последовательно проверяет автоматические тесты, конфигурацию, готовность инфраструктуры, совпадение Docker runtime с ожидаемыми настройками и здоровье сервисов. При ошибке любого этапа следующая часть не выполняется. Режим `--check-only` не должен создавать сеть или изменять контейнеры.
 
-    python -m pip install -r requirements-dev.txt
-    python -B -m pytest -p no:cacheprovider -q
+Если нужно проверить именно внешний API, после успешного чека можно отдельно выполнить:
 
-Offline-набор не запускает Docker daemon/контейнеры. Дополнительные тесты
-с маркером compose используют только docker compose config и временные env-файлы.
-Windows: Git Bash проверяет shell syntax; Linux CI делает это автоматически.
-Если стандартная временная папка недоступна, выбрать новую собственную директорию
-через pytest --basetemp. Не использовать существующую папку с нужными файлами:
-pytest управляет её содержимым.
+```bash
+python3 scripts/check-vlm-tool-calling.py --url http://192.168.55.3:8000/v1 --model shared-vlm --repeats 10 --min-success 1.0
+```
 
-Workflow Infrastructure checks запускает проверки на Windows/Linux. Обязательность
-проверки перед merge настраивается отдельно в GitHub; workflow сам её не включает.
+Это уже функциональный тест реальной модели, а не обязательная часть общей однострочной команды: при большой модели он потребляет GPU и выполняет реальные запросы. Для проверки embedding и общей конкурентной нагрузки используйте `scripts/check-shared-contracts.py`, **если этот файл принят и существует**.
 
-Все изменения текущего исправления составляют один commit. Перед commit:
+На Windows команды линтинга/тестов выполняются отдельно в PowerShell; Linux `bash`/Docker checks не следует выдавать за проверенные на Windows.
 
-    git diff --check
-    git diff --cached --check
-    git status --short
+## 8. Работа с VLM: только ручное изменение `.env`
 
-Не использовать git add . для серверного каталога. У origin этого checkout два
-push-адреса; для однозначной отправки пользователь использует явный target:
+**Утверждённое решение владельца:** скрипт выбора модели — **только для чтения**. Он может показать скачанные модели, текущие/предлагаемые параметры и предупреждения, но не имеет права:
 
-    git push git@github.com:Amadu-A/shared_infrasktructure.git HEAD:refs/heads/fix/instruction-consistency
+- изменять `.env` или любые другие конфигурационные файлы;
+- создавать `compose.override.yaml`;
+- самостоятельно пересоздавать контейнеры;
+- автоматически заменять `revision=main` на другой commit.
 
-## Остановка, данные и reboot
+Порядок переключения:
 
-Операторские stop/start/down относятся только к текущему Compose-проекту.
-restart: unless-stopped сохраняется. После reboot проверяются Docker, shared
-network, GPU и check. Не выполнять down -v без отдельного решения: он может
-удалить HF/vLLM cache, Open WebUI, n8n/PostgreSQL и RabbitMQ data.
-External ai-shared не принадлежит lifecycle application project.
+1. Проверить, что новая модель поддерживает нужные VLM, Tool Calling и размер контекста, и предварительно скачать её в существующий HF cache, не останавливая текущую модель.
+2. Сохранить защищённую копию `.env` и зафиксировать действующие модель/revision/GPU/TP/DP/лимиты очереди.
+3. **Вручную** изменить нужные VLM-переменные в `.env`; другие сервисы не трогать.
+4. Проверить `python3 scripts/deployment.py validate`, `docker compose config --quiet` и сравнить ожидаемую конфигурацию с запущенной. При неизвестном override или перекрытии значений окружением остановиться и разобраться.
+5. В согласованное эксплуатационное окно вручную применить изменение **только для VLM**:
+
+```bash
+docker compose --profile ai-vlm up -d --no-deps --force-recreate shared-vlm
+```
+
+6. Дождаться `healthy`; проверить `/v1/models`, vision, Tool Calling, конкуренцию запросов и отсутствие OOM. При ошибке восстановить прежние конфигурационные значения и отдельно пересоздать `shared-vlm`.
+
+Текущий проверенный baseline: `Qwen/Qwen3.8-27B`, GPU 2,3, TP=2, DP=1, контекст 262144, очередь 48, максимум последовательностей 8. Это **текущая конфигурация, а не навсегда зашитый профиль**. Kimi-VL Thinking загружена в HF cache, но её совместимость с текущим vLLM и Tool Calling ещё не утверждена.
+
+## 9. n8n и RabbitMQ — правила для разработчиков
+
+**n8n:** на общей сети доступен по `http://n8n:5678`. Workflow по возможности именовать с префиксом проекта, например `[PDRD] ...` и `[CONTRACT] ...`. `n8n-db` — только для n8n, прямые подключения к ней из приложений запрещены.
+
+**RabbitMQ:** адрес для контейнеров в `ai-shared` — `rabbitmq:5672`. Каждый проект по возможности получает собственный vhost и отдельного пользователя с ограниченными разрешениями. Учётные данные начального администратора `shared_admin` не использовать в production-приложениях. Создание/изменение vhost и пользователей — отдельная административная операция; изменение `RABBITMQ_DEFAULT_PASS` в `.env` не заменяет её.
+
+**Общие модели:** приложения используют logical alias (`shared-vlm`/`shared-embedding`). Физическая модель, GPU и её формат хранения известны только shared-infrastructure. Не запускать отдельный vLLM для каждого приложения без утверждённого исключения.
+
+## 10. Безопасное обновление, диагностика и резервные копии
+
+- Прежде чем применять код: проверить `git status`, commit SHA и что секреты не попадут в commit; выполнять `git pull --ff-only` только в согласованной ветке.
+- **Никогда** не запускать без отдельного разрешения `docker compose down -v`: это может удалить volumes с весами моделей, n8n/PostgreSQL, RabbitMQ и Open WebUI.
+- Не использовать глобальный `up --remove-orphans` и массовый `--force-recreate` для изменения одной модели.
+- Изменение одного параметра в `.env` само по себе не обновляет запущенный контейнер; `docker compose restart` также не применяет обновлённую конфигурацию контейнера.
+- Для смены настройки одного сервиса выбирайте отдельное согласованное окно и целевой recreate; проверяйте зависимые приложения.
+- Профиль ai-vlm не должен пересоздавать embedding, n8n, RabbitMQ и их БД.
+- Для `n8n-db` перед пересозданием требуется проверенная резервная копия и процедура восстановления.
+- Для всех шести сервисов принято конечное хранение Docker-журналов: драйвер `local`, `max-size=10m`, `max-file=5`. Эта настройка вступает в силу только после пересоздания конкретного контейнера; изменение Compose не меняет действующий контейнер автоматически.
+- Docker logging не является архивом расследований: старые ротированные логи удаляются, важные события нужно своевременно экспортировать в отдельное безопасное хранилище.
+
+Безопасные команды диагностики:
+
+```bash
+docker compose ps
+docker network inspect ai-shared
+docker compose logs --tail=100 shared-vlm
+nvidia-smi
+```
+
+Не выкладывать публично полный `docker compose config --format json` и `.env`: в них могут оказаться секреты.
+
+## 11. Где искать обязательные правила
+
+| Вопрос | Источник |
+|---|---|
+| Что читать сначала и как разрешать противоречия | [docs/LLM_CONTEXT.md](docs/LLM_CONTEXT.md) |
+| Стандарты кода, тестов и документации | [docs/ENGINEERING_GUIDELINES.md](docs/ENGINEERING_GUIDELINES.md) |
+| Frontend, шаблоны, CSS, JS | [docs/FRONTEND_GUIDELINES.md](docs/FRONTEND_GUIDELINES.md) |
+| Инфраструктура, сети, deployment, безопасность, миграции | [docs/INFRASTRUCTURE_INSTRUCTIONS.md](docs/INFRASTRUCTURE_INSTRUCTIONS.md) |
+| Точные контракты и предусмотренная топология общих сервисов | [docs/services.yaml](docs/services.yaml) |
+| Решения владельца этого deployment | `docs/ARCHITECTURE_DECISIONS.md` (после добавления и принятия) |
+| Допустимые переменные и default-значения | [compose.yaml](compose.yaml), [.env.example](.env.example) |
+| Какие сервисы действительно запущены | Docker runtime на сервере, а не только документы |
+
+**README — удобный практический вход в проект, не второй независимый набор нормативных требований.** В случае изменения правил меняйте их в документе-владельце, обновляйте рабочие примеры README и проверяйте автоматические тесты. Перед новым проектом ИИ-разработчик начинает с `docs/LLM_CONTEXT.md`; остальные документы читает по виду задачи.
