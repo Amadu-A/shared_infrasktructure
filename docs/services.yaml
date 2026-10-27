@@ -338,7 +338,8 @@ llm_rules:
   - Read docs/FRONTEND_GUIDELINES.md only when frontend is affected.
   - Read docs/INFRASTRUCTURE_INSTRUCTIONS.md when infrastructure or shared services are affected.
   - This services.yaml is required when a shared service is added, changed or consumed.
-  - Reuse services with managed_here=true unless an exception is documented.
+  - managed_here indicates ownership; reuse requires shared lifecycle, permitted consumers and a suitable contract.
+  - Never reuse infrastructure-private services such as n8n-db from business applications.
   - Use shared-vlm for shared generation and VLM workloads.
   - Use shared-embedding for compatible shared embedding workloads.
   - Do not create project-local vLLM when a suitable shared service exists.

@@ -1,7 +1,14 @@
-
 # compose.yaml
+# Общие сервисы с независимым lifecycle. Окружение > .env > defaults.
+# Имена сетей и порядок создания пользователей RabbitMQ не изменяются.
 
 name: ${COMPOSE_PROJECT_NAME:-shared}
+
+x-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: "${SHARED_LOG_MAX_SIZE:-10m}"
+    max-file: "${SHARED_LOG_MAX_FILE:-5}"
 
 services:
   # -------------------------------------------------------------------------
@@ -13,6 +20,7 @@ services:
 
     image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.29.0}
     restart: unless-stopped
+    logging: *bounded-logging
     ipc: host
 
     ports:
@@ -22,7 +30,7 @@ services:
       HF_HOME: /root/.cache/huggingface
       HF_TOKEN: ${HF_TOKEN:-}
       CUDA_DEVICE_ORDER: ${VLLM_CUDA_DEVICE_ORDER:-PCI_BUS_ID}
-      CUDA_VISIBLE_DEVICES: ${SHARED_VLM_GPU_DEVICES:-0}
+      CUDA_VISIBLE_DEVICES: ${SHARED_VLM_GPU_DEVICES:-2,3}
 
       # Online reproducibility mode.
       # vLLM must produce the same result for the same request independently
@@ -32,46 +40,28 @@ services:
     volumes:
       - huggingface-cache:/root/.cache/huggingface
       - vllm-cache:/root/.cache/vllm
+      - ./scripts/vlm-entrypoint.py:/opt/shared/vlm-entrypoint.py:ro
+      - ./scripts/deployment.py:/opt/shared/deployment.py:ro
 
     networks:
       - ai-shared
 
     gpus: all
 
-    command:
-      - --model
-      - "${SHARED_VLM_MODEL_ID:-Qwen/Qwen3-VL-8B-Instruct}"
-      - --revision
-      - "${SHARED_VLM_MODEL_REVISION:-main}"
-      - --served-model-name
-      - "${SHARED_VLM_MODEL_ALIAS:-shared-vlm}"
-      - --reasoning-parser
-      - qwen3
-      - --enable-auto-tool-choice
-      - --tool-call-parser
-      - qwen3_coder
-      - --spec-method
-      - mtp
-      - --spec-tokens
-      - "3"
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8000"
-      - --tensor-parallel-size
-      - "${SHARED_VLM_TP_SIZE:-1}"
-      - --data-parallel-size
-      - "${SHARED_VLM_DP_SIZE:-1}"
-      - --max-model-len
-      - "${SHARED_VLM_MAX_MODEL_LEN:-8192}"
-      - --gpu-memory-utilization
-      - "${SHARED_VLM_GPU_MEMORY_UTILIZATION:-0.90}"
-      - --max-num-seqs
-      - "${SHARED_VLM_MAX_NUM_SEQS:-8}"
-      - --max-num-queued-reqs
-      - "${SHARED_VLM_MAX_NUM_QUEUED_REQS:-32}"
-      - --max-num-queued-tokens
-      - "${SHARED_VLM_MAX_NUM_QUEUED_TOKENS:-32768}"
+    entrypoint: ["python3", "-B", "/opt/shared/vlm-entrypoint.py", "shared-vlm"]
+    command: >-
+      --model "${SHARED_VLM_MODEL_ID:-Qwen/Qwen3.8-27B}"
+      --revision "${SHARED_VLM_MODEL_REVISION:-main}"
+      --served-model-name "${SHARED_VLM_MODEL_ALIAS:-shared-vlm}"
+      --tensor-parallel-size "${SHARED_VLM_TP_SIZE:-}"
+      --data-parallel-size "${SHARED_VLM_DP_SIZE:-}"
+      --max-model-len "${SHARED_VLM_MAX_MODEL_LEN:-}"
+      --gpu-memory-utilization "${SHARED_VLM_GPU_MEMORY_UTILIZATION:-0.90}"
+      --max-num-seqs "${SHARED_VLM_MAX_NUM_SEQS:-8}"
+      --max-num-queued-reqs "${SHARED_VLM_MAX_NUM_QUEUED_REQS:-32}"
+      --max-num-queued-tokens "${SHARED_VLM_MAX_NUM_QUEUED_TOKENS:-32768}"
+      --host "0.0.0.0" --port "8000"
+      ${SHARED_VLM_MODEL_ARGS:---reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --spec-method mtp --spec-tokens 3}
 
     healthcheck:
       test:
@@ -98,6 +88,7 @@ services:
 
     image: ${VLLM_IMAGE:-vllm/vllm-openai:v0.29.0}
     restart: unless-stopped
+    logging: *bounded-logging
     ipc: host
 
     ports:
@@ -107,17 +98,20 @@ services:
       HF_HOME: /root/.cache/huggingface
       HF_TOKEN: ${HF_TOKEN:-}
       CUDA_DEVICE_ORDER: ${VLLM_CUDA_DEVICE_ORDER:-PCI_BUS_ID}
-      CUDA_VISIBLE_DEVICES: ${SHARED_EMBEDDING_GPU_DEVICES:-0}
+      CUDA_VISIBLE_DEVICES: ${SHARED_EMBEDDING_GPU_DEVICES:-1}
 
     volumes:
       - huggingface-cache:/root/.cache/huggingface
       - vllm-cache:/root/.cache/vllm
+      - ./scripts/vlm-entrypoint.py:/opt/shared/vlm-entrypoint.py:ro
+      - ./scripts/deployment.py:/opt/shared/deployment.py:ro
 
     networks:
       - ai-shared
 
     gpus: all
 
+    entrypoint: ["python3", "-B", "/opt/shared/vlm-entrypoint.py", "shared-embedding"]
     command:
       - --model
       - "${SHARED_EMBEDDING_MODEL_ID:-Qwen/Qwen3-VL-Embedding-8B}"
@@ -170,7 +164,9 @@ services:
       - ai-ui
 
     image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.3}
+    command: ["bash", "/opt/shared/open-webui-entrypoint.sh"]
     restart: unless-stopped
+    logging: *bounded-logging
 
     depends_on:
       shared-vlm:
@@ -182,7 +178,7 @@ services:
     environment:
       WEBUI_NAME: ${OPEN_WEBUI_NAME:-Shared AI}
       WEBUI_URL: "http://${SHARED_PUBLIC_HOST:-localhost}:${OPEN_WEBUI_HOST_PORT:-3000}"
-      WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-CHANGE_ME_GENERATE_WITH_OPENSSL_RAND_HEX_32}
+      WEBUI_SECRET_KEY: ${OPEN_WEBUI_SECRET_KEY:-}
 
       ENABLE_PERSISTENT_CONFIG: ${OPEN_WEBUI_ENABLE_PERSISTENT_CONFIG:-false}
 
@@ -194,6 +190,7 @@ services:
 
     volumes:
       - open-webui-data:/app/backend/data
+      - ./scripts/open-webui-entrypoint.sh:/opt/shared/open-webui-entrypoint.sh:ro
 
     networks:
       - ai-shared
@@ -220,6 +217,7 @@ services:
   n8n-db:
     image: ${N8N_POSTGRES_IMAGE:-postgres:16-alpine}
     restart: unless-stopped
+    logging: *bounded-logging
 
     environment:
       POSTGRES_DB: ${N8N_DB_NAME:-n8n}
@@ -247,6 +245,7 @@ services:
   n8n:
     image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:2.34.5}
     restart: unless-stopped
+    logging: *bounded-logging
 
     depends_on:
       n8n-db:
@@ -301,6 +300,7 @@ services:
   rabbitmq:
     image: ${RABBITMQ_IMAGE:-rabbitmq:4.1-management}
     restart: unless-stopped
+    logging: *bounded-logging
 
     ports:
       - "${RABBITMQ_BIND_IP:-0.0.0.0}:${RABBITMQ_AMQP_HOST_PORT:-5672}:5672"

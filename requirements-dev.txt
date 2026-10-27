@@ -1,0 +1,4 @@
+# requirements-dev.txt
+# Зависимости только для локальных проверок и CI.
+pytest==9.1.1
+PyYAML==6.0.3

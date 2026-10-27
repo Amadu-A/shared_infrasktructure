@@ -36,8 +36,10 @@ Verify runtime before infrastructure changes.
 managed_here: true
 ```
 
-новый project MUST использовать его как external dependency и MUST NOT создавать
-свою копию без отдельного архитектурного решения.
+это определяет владельца, но не разрешает всем проектам доступ. Project MUST
+проверить lifecycle, разрешённых потребителей и пригодность контракта.
+Подходящий разрешённый shared service используется как external dependency
+без создания копии. Private n8n-db принадлежит только n8n.
 
 Project-specific по умолчанию:
 
@@ -162,7 +164,10 @@ docker compose ps
 ./scripts/check.sh
 ```
 
-Если shell access отсутствует, LLM MUST запросить relevant output.
+Если shell access отсутствует, LLM MUST запросить relevant output перед
+эксплуатационным применением. Локальные инструкции, код и offline-тесты можно
+подготовить без доступа к серверу, явно указав runtime как непроверенный.
+Такая проверка кода не разрешает deployment или recreate.
 
 Не проектировать infrastructure по памяти, старому SHA или старому Compose.
 
@@ -492,53 +497,31 @@ model:    shared-vlm
 
 Утверждённый operational order смены physical VLM model:
 
-1. проверить compatibility модели с текущим vLLM, modality, VRAM и GPU topology;
-2. предварительно скачать выбранный `MODEL_ID` + `MODEL_REVISION` в shared
-   Hugging Face cache;
-3. проверить наличие snapshot и свободное disk space;
-4. изменить deployment `.env`: model ID/revision и при необходимости
-   GPU/TP/DP/context;
-5. выполнить `docker compose config --quiet` и `./scripts/bootstrap.sh`;
-6. только после успешной validation выполнить force-recreate `shared-vlm`;
-7. дождаться `healthy`, проверить logs и `nvidia-smi`;
-8. выполнить `/v1/models`, functional smoke test и `./scripts/check.sh`;
-9. при failure вернуть предыдущие deployment values и выполнить recreate;
-10. не менять application `SHARED_VLM_MODEL=shared-vlm`.
+1. Проверить runtime, поддержку модели, modality, tools/MTP, VRAM и topology.
+2. Предварительно скачать точный snapshot в общий cache до остановки текущей модели;
+   автоматический переключатель ничего не скачивает.
+3. Сохранить закрытый backup, предыдущий exact revision, flags и image.
+   Revision main не гарантирует точного rollback.
+4. Старый owned override переносится отдельной миграцией с доказательством
+   равенства всей итоговой конфигурации; неизвестный override не изменять.
+5. Менять deployment-параметры через серверный .env. Окружение команды имеет
+   приоритет; на время сохраняемого выбора оно не должно перекрывать VLM-поля.
+6. TP, DP и context задаются явно. Скрипт не подбирает их по размеру модели.
+   Alias не меняется. MODEL_ARGS содержит только модельные flags, а не повторные
+   model/revision/alias/GPU/TP/DP/context.
+7. Проверить итоговый Compose и bootstrap без создания сети.
+8. Получить отдельное подтверждение эксплуатационного переключения. Установка
+   кода или Git commit не разрешает остановить рабочую модель.
+9. Пересоздать только shared-vlm с --no-deps; ждать healthy с конечным timeout.
+10. Проверить text, vision, structured tools, alias, метрики и совместную нагрузку
+    PDRD-validation, OpenClaw, Open WebUI и остальных клиентов; embedding продолжает
+    работать на своём GPU.
+11. При ошибке вернуть все прежние deployment-поля и только VLM-контейнер;
+    подтвердить healthy и API. Веса и volumes не удалять.
 
-Pre-download SHOULD выполняться до остановки текущего VLM и использовать shared
-Hugging Face persistent cache. Пример:
-
-```bash
-docker compose \
-  --profile ai-vlm \
-  run --rm \
-  --no-deps \
-  --entrypoint python3 \
-  shared-vlm \
-  -c 'from huggingface_hub import snapshot_download; snapshot_download("<MODEL_ID>", revision="<MODEL_REVISION>")'
-```
-
-Проверка snapshot:
-
-```bash
-docker compose \
-  --profile ai-vlm \
-  run --rm \
-  --no-deps \
-  --entrypoint sh \
-  shared-vlm \
-  -c 'du -sh /root/.cache/huggingface/hub/models--<ORG>--<MODEL>'
-```
-
-После изменения `.env`:
-
-```bash
-docker compose \
-  --profile ai-vlm \
-  up -d \
-  --force-recreate \
-  shared-vlm
-```
+Операторские команды находятся в [README.md](../README.md#смена-vlm-и-rollback).
+Самостоятельная копия процедуры в README не ведётся. Новый compose.override.yaml
+при выборе модели запрещён.
 
 Для `TP_SIZE > 1` MUST учитывать actual GPU topology и benchmark.
 
@@ -723,10 +706,21 @@ trusted LAN/VPN и host firewall.
 `HF_TOKEN`, если он нужен для gated/private Hugging Face repository, является
 deployment secret shared infrastructure и MUST NOT передаваться business projects.
 
-После environment/config change нужен recreate:
+Приоритет един для Compose, bootstrap и check:
+
+```text
+окружение команды > серверный .env > разрешённый default Compose
+```
+
+.env.example остаётся каталогом и автоматически не загружается. Обязательная
+настройка без значения останавливает preflight до создания сети/запуска. Для
+опциональных сервисов проверяются поля выбранного сервиса. Docker-entrypoint
+проверяет UI-secret и inference-параметры до старта приложения.
+
+После подтверждённого environment/config change нужен recreate:
 
 ```bash
-docker compose up -d --force-recreate <service>
+docker compose up -d --no-deps --force-recreate <service>
 ```
 
 Не использовать `docker compose down -v` без понимания последствий.
@@ -816,11 +810,12 @@ LLM MUST:
 1. прочитать актуальный `services.yaml`;
 2. определить required dependencies;
 3. проверить `managed_here`;
-4. если `managed_here: true`:
+4. если `managed_here: true`, lifecycle разрешает reuse и contract подходит:
    - НЕ добавлять server container;
    - использовать stable endpoint;
    - добавить только client/adaptor/config;
-5. если service отсутствует — определить, project-specific он или кандидат в shared;
+5. если service отсутствует или private — определить подходящую project-specific
+   dependency; private n8n-db для business project запрещена;
 6. подключить только нужные services к `ai-shared`;
 7. оставить project state в private network;
 8. не публиковать host ports без необходимости;
@@ -906,57 +901,19 @@ docker compose logs --tail=100 <service>
 
 ---
 
-## 23. Definition of Done
+<a id="23-definition-of-done"></a>
+<a id="25-infrastructure-definition-of-done"></a>
 
-```text
-[ ] Актуальные compose/config/scripts прочитаны.
-[ ] services.yaml прочитан, если затронут shared.
-[ ] Runtime проверен.
-[ ] Для dependency определён owner.
-[ ] Existing shared services переиспользованы.
-[ ] Shared runtime не встроен в business project.
-[ ] Нет duplicate vLLM/RabbitMQ/n8n/shared embedding.
-[ ] Project содержит clients/adapters, а не shared runtimes.
-[ ] Используются stable logical endpoints.
-[ ] Project state остаётся private.
-[ ] Secrets отсутствуют в Git/logs.
-[ ] GPU parameters остаются deployment config.
-[ ] Для TP>1 проверена topology/benchmark.
-[ ] Для embedding migration проверена compatibility.
-[ ] docker compose config проходит.
-[ ] Runtime проверен после запуска.
-[ ] Rollback/migration понятен.
-```
-
----
-
-## 24. Итог
-
-```text
-Reuse shared services.
-Do not embed shared runtimes into business projects.
-Do not duplicate them without explicit architecture decision.
-Use clients/adapters instead of local copies.
-Keep shared lifecycle independent.
-Keep project state isolated.
-Use stable logical contracts.
-Keep physical model/GPU placement in shared deployment configuration.
-Verify runtime before changing infrastructure.
-```
-
-
-## 25. Infrastructure Definition of Done
-
-Перед завершением infrastructure task проверить:
+## 23. Infrastructure Definition of Done
 
 ```text
 [ ] Прочитан актуальный compose/config/scripts.
 [ ] Прочитан services.yaml, если затронут shared.
-[ ] Runtime state проверен.
+[ ] Runtime state проверен; локальная разработка не выдаётся за проверку deployment.
 [ ] Для каждой dependency определён owner.
 [ ] Existing shared services переиспользованы.
 [ ] Shared service не встроен в business project.
-[ ] Нет duplicate model server/broker/n8n.
+[ ] Нет duplicate model server/broker/n8n/shared embedding.
 [ ] Application содержит только clients/adapters к shared runtime.
 [ ] Stable logical endpoints используются вместо physical model/GPU details.
 [ ] ai-shared подключена только там, где нужна.
@@ -973,6 +930,25 @@ Verify runtime before changing infrastructure.
 [ ] Runtime проверен после запуска.
 [ ] Для migration/reindex/recreate есть явные instructions.
 [ ] Rollback понятен.
+[ ] Совместная работа разрешённых клиентов проверена перед переключением.
+[ ] Конечная rotation/retention logs подтверждена.
+[ ] Обязательные tests проходят; secrets не попадают в diagnostics.
+```
+
+---
+
+## 24. Итог
+
+```text
+Reuse shared services.
+Do not embed shared runtimes into business projects.
+Do not duplicate them without explicit architecture decision.
+Use clients/adapters instead of local copies.
+Keep shared lifecycle independent.
+Keep project state isolated.
+Use stable logical contracts.
+Keep physical model/GPU placement in shared deployment configuration.
+Verify runtime before changing infrastructure.
 ```
 
 ---

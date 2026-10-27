@@ -1,3 +1,4 @@
+<!-- SERVICES.md -->
 # Shared Services Registry
 
 Краткий человекочитаемый реестр. Machine-readable source of truth:
@@ -50,6 +51,10 @@ shared-embedding
 и не поднимают собственную копию общей модели без документированной причины.
 
 ## Проверка
+
+Актуальные команды и условия deployment: [README.md](README.md).
+Окружение команды, .env и defaults разрешает сам Compose; registry не подменяет
+фактические runtime-проверки.
 
 ```bash
 docker compose ps

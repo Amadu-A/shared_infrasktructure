@@ -1,0 +1,42 @@
+# .github/workflows/checks.yml
+# Offline-тесты не подключаются к серверу и не запускают контейнеры.
+name: Infrastructure checks
+on:
+  pull_request:
+  push:
+permissions:
+  contents: read
+jobs:
+  offline:
+    name: offline (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.12', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements-dev.txt
+      - run: python -B -m pytest -p no:cacheprovider -m "not compose" -q
+      - name: Bash syntax
+        if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/bootstrap.sh
+          bash -n scripts/check.sh
+          bash -n scripts/open-webui-entrypoint.sh
+
+  compose:
+    name: compose-config
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: docker compose version
+      - run: python -B -m pytest -p no:cacheprovider -m compose -q

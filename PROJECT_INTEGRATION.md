@@ -1,79 +1,16 @@
+<!-- PROJECT_INTEGRATION.md -->
 # Project Integration
 
-Этот файл — короткий указатель для разработчика.
+Короткий указатель на переносимый набор инструкций; самостоятельных правил нет.
 
-Он **не является отдельным source of truth** и не должен дублировать
-инженерные и инфраструктурные правила.
+Точка входа: [docs/LLM_CONTEXT.md](docs/LLM_CONTEXT.md).
+Порядок и объём чтения определяет её router.
 
-## С чего начинать новый проект
+- [Engineering Guidelines](docs/ENGINEERING_GUIDELINES.md) — общая инженерная практика.
+- [Frontend Guidelines](docs/FRONTEND_GUIDELINES.md) — frontend и его checklist.
+- [Infrastructure Instructions](docs/INFRASTRUCTURE_INSTRUCTIONS.md) — ownership,
+  lifecycle, интеграция, runtime discovery и infrastructure DoD.
+- [services.yaml](docs/services.yaml) — intended contracts и topology.
 
-Перед планированием архитектуры или `compose.yaml` передайте LLM папку:
-
-```text
-docs/
-├── LLM_CONTEXT.md
-├── ENGINEERING_GUIDELINES.md
-├── FRONTEND_GUIDELINES.md
-├── INFRASTRUCTURE_INSTRUCTIONS.md
-└── services.yaml
-```
-
-Главная точка входа:
-
-```text
-docs/LLM_CONTEXT.md
-```
-
-LLM должна сначала прочитать её и выполнить указанный там порядок.
-
-Если проект содержит frontend или задача затрагивает HTML/CSS/JS/templates,
-`docs/FRONTEND_GUIDELINES.md` MUST быть прочитан полностью.
-
-## Что описывают файлы
-
-```text
-docs/LLM_CONTEXT.md
-    порядок работы LLM и обязательные проверки
-
-docs/ENGINEERING_GUIDELINES.md
-    backend architecture, DI, SOLID, Python code style,
-    documentation, logging, testing, configuration
-
-docs/FRONTEND_GUIDELINES.md
-    HTML, CSS, BEM, JavaScript, templates,
-    accessibility и frontend review checklist
-
-docs/INFRASTRUCTURE_INSTRUCTIONS.md
-    Docker, shared services, networks, ports,
-    environment variables, runtime verification
-
-docs/services.yaml
-    machine-readable intended topology shared infrastructure
-```
-
-## Важное правило
-
-`docs/services.yaml` не доказывает, что service сейчас запущен.
-
-Перед infrastructure changes нужно проверить runtime:
-
-```bash
-docker ps \
-  --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}'
-
-docker network ls
-
-sudo ss -lntp
-
-nvidia-smi
-```
-
-Shared stack:
-
-```bash
-cd ~/projects/shared-infrastructure
-docker compose ps
-```
-
-Project-specific implementation details SHOULD находиться в документации
-самого application repository, а не дублироваться здесь.
+Операторские команды: [README.md](README.md).
+Project-specific детали бизнес-приложения хранятся в его собственном repository.
