@@ -40,15 +40,14 @@ services:
     volumes:
       - huggingface-cache:/root/.cache/huggingface
       - vllm-cache:/root/.cache/vllm
-      - ./scripts/vlm-entrypoint.py:/opt/shared/vlm-entrypoint.py:ro
-      - ./scripts/deployment.py:/opt/shared/deployment.py:ro
+      - ./scripts/config-check.py:/opt/shared/config-check.py:ro
 
     networks:
       - ai-shared
 
     gpus: all
 
-    entrypoint: ["python3", "-B", "/opt/shared/vlm-entrypoint.py", "shared-vlm"]
+    entrypoint: ["python3", "-B", "/opt/shared/config-check.py", "guard", "shared-vlm"]
     command: >-
       --model "${SHARED_VLM_MODEL_ID:-Qwen/Qwen3.8-27B}"
       --revision "${SHARED_VLM_MODEL_REVISION:-main}"
@@ -103,15 +102,14 @@ services:
     volumes:
       - huggingface-cache:/root/.cache/huggingface
       - vllm-cache:/root/.cache/vllm
-      - ./scripts/vlm-entrypoint.py:/opt/shared/vlm-entrypoint.py:ro
-      - ./scripts/deployment.py:/opt/shared/deployment.py:ro
+      - ./scripts/config-check.py:/opt/shared/config-check.py:ro
 
     networks:
       - ai-shared
 
     gpus: all
 
-    entrypoint: ["python3", "-B", "/opt/shared/vlm-entrypoint.py", "shared-embedding"]
+    entrypoint: ["python3", "-B", "/opt/shared/config-check.py", "guard", "shared-embedding"]
     command:
       - --model
       - "${SHARED_EMBEDDING_MODEL_ID:-Qwen/Qwen3-VL-Embedding-8B}"
@@ -164,7 +162,7 @@ services:
       - ai-ui
 
     image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.3}
-    command: ["bash", "/opt/shared/open-webui-entrypoint.sh"]
+    command: ["python", "-B", "/opt/shared/config-check.py", "guard", "open-webui"]
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -190,7 +188,7 @@ services:
 
     volumes:
       - open-webui-data:/app/backend/data
-      - ./scripts/open-webui-entrypoint.sh:/opt/shared/open-webui-entrypoint.sh:ro
+      - ./scripts/config-check.py:/opt/shared/config-check.py:ro
 
     networks:
       - ai-shared

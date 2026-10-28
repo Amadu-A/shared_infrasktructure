@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # scripts/check.sh
-# Проверяет итоговый Compose: окружение > .env > defaults; контейнеры не запускает.
-# .env как shell-код не исполняется. Bootstrap --check-only не создаёт сеть.
+# Проверяет настройки Compose, health и доступность моделей; ничего не меняет.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-exec python3 scripts/deployment.py check "$@"
+exec python3 scripts/config-check.py check "$@"
