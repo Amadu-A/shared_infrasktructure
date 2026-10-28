@@ -12,6 +12,7 @@ __pycache__/
 .coverage
 htmlcov/
 .idea/
+idea/
 .vscode/
 *.log
 /compose.override.yaml
