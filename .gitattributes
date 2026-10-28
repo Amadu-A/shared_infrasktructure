@@ -1,0 +1,13 @@
+# .gitattributes
+# Одинаковое чтение исходников после checkout на Windows и Linux.
+*.sh text eol=lf
+*.py text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
+.env.example text eol=lf
+
+.gitignore text eol=lf
+*.txt text eol=lf
+*.ini text eol=lf
+.gitattributes text eol=lf

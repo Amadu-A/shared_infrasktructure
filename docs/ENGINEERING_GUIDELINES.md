@@ -76,7 +76,8 @@ transport -> services/use_cases -> repositories
 относительный путь от корня проекта.
 
 Для файлов, синтаксис которых позволяет комментарий, относительный путь
-MUST также указываться первой строкой файла.
+MUST также указываться первой допустимой строкой комментария.
+Shebang и обязательные заголовки формата сохраняют своё место перед этим комментарием.
 
 Пример Python:
 
@@ -1127,13 +1128,12 @@ def log_execution_time(
                 """Измеряет время async-операции и пишет одно итоговое событие."""
 
                 started_at = perf_counter()
-                status = "success"
+                status = "error"
 
                 try:
-                    return await func(*args, **kwargs)
-                except Exception:
-                    status = "error"
-                    raise
+                    result = await func(*args, **kwargs)
+                    status = "success"
+                    return result
                 finally:
                     duration_ms = (perf_counter() - started_at) * 1000
                     logger.info(
@@ -1153,13 +1153,12 @@ def log_execution_time(
             """Измеряет время sync-операции и пишет одно итоговое событие."""
 
             started_at = perf_counter()
-            status = "success"
+            status = "error"
 
             try:
-                return func(*args, **kwargs)
-            except Exception:
-                status = "error"
-                raise
+                result = func(*args, **kwargs)
+                status = "success"
+                return result
             finally:
                 duration_ms = (perf_counter() - started_at) * 1000
                 logger.info(
@@ -1176,6 +1175,9 @@ def log_execution_time(
 
     return decorator
 ```
+
+Отмена async-операции не является успехом: CancelledError продолжает
+распространяться, итоговый status остаётся error.
 
 Применение:
 
@@ -1858,6 +1860,7 @@ sync success;
 sync exception;
 async success;
 async exception;
+async cancellation с сохранением CancelledError и status=error;
 наличие duration_ms;
 наличие status;
 сохранение metadata исходной функции через functools.wraps.
@@ -1904,9 +1907,9 @@ Merge MUST быть заблокирован при падении обязат�
 
 LLM MUST:
 
-1. прочитать этот документ;
-2. прочитать project-specific README/architecture docs;
-3. прочитать `docs/LLM_CONTEXT.md`;
+1. начать с `docs/LLM_CONTEXT.md` и его task router;
+2. прочитать актуальные project-specific README/architecture docs;
+3. прочитать этот документ, когда он требуется router;
 4. проверить `docs/services.yaml`, если затрагивается shared infrastructure;
 5. определить shared vs project-specific dependencies;
 6. определить application boundaries;
@@ -1969,7 +1972,7 @@ LLM MUST явно указать:
 
 ### Frontend
 
-- один `style.css` entrypoint;
+- единый принятый CSS entrypoint по `FRONTEND_GUIDELINES.md`;
 - CSS imports из отдельных modules;
 - BEM;
 - semantic HTML;
@@ -2051,19 +2054,10 @@ LLM MUST явно указать:
 
 ## 60. Frontend
 
-- [ ] Используется semantic HTML.
-- [ ] Повторяемая разметка вынесена в base/partials.
-- [ ] BEM соблюдён.
-- [ ] Нет больших inline `<style>`.
-- [ ] Нет inline `onclick`.
-- [ ] HTML подключает основной `style.css`.
-- [ ] `style.css` агрегирует block/module CSS.
-- [ ] CSS файлы соответствуют blocks/features, а не случайным страницам.
-- [ ] Scripts подключены в `<head>` с `defer` или `type="module"`.
-- [ ] Common JS и feature JS разделены.
-- [ ] JS использует `data-*` hooks там, где это разумно.
-- [ ] Dynamic status и controls доступны с keyboard/screen reader.
-- [ ] Недоверенные данные не вставляются через raw `innerHTML`.
+Единственный обязательный frontend checklist находится в
+[FRONTEND_GUIDELINES.md, §49.2](FRONTEND_GUIDELINES.md#492-обязательный-frontend-review-checklist).
+Он сохраняет исключение для утверждённого project entrypoint. Самостоятельная
+копия frontend checklist в Engineering не ведётся.
 
 ---
 

@@ -3,7 +3,8 @@
 # Frontend Guidelines: HTML, CSS, BEM, JavaScript, Templates and Accessibility
 
 > **Назначение:** обязательный frontend source of truth для проектов,
-> в которых есть HTML, CSS, JavaScript, templates или browser UI.
+> при задачах, затрагивающих HTML, CSS, JavaScript, templates или browser UI.
+> Само наличие frontend не расширяет область инфраструктурной задачи.
 >
 > Этот документ применяется **вместе** с `ENGINEERING_GUIDELINES.md`.
 > Общие правила архитектуры, документирования файлов и функций, тестирования,
