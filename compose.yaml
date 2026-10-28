@@ -161,7 +161,7 @@ services:
     profiles:
       - ai-ui
 
-    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.3}
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.12.4}
     command: ["python", "-B", "/opt/shared/config-check.py", "guard", "open-webui"]
     restart: unless-stopped
     logging: *bounded-logging
@@ -208,6 +208,43 @@ services:
       timeout: 10s
       retries: 5
       start_period: 90s
+
+  # -------------------------------------------------------------------------
+  # Private search backend for Open WebUI
+  # -------------------------------------------------------------------------
+  searxng:
+    profiles:
+      - ai-search
+
+    image: ${SEARXNG_IMAGE:-ghcr.io/searxng/searxng:2026.10.23-629368e40}
+    restart: unless-stopped
+    logging: *bounded-logging
+
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-}
+
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - searxng-cache:/var/cache/searxng
+
+    networks:
+      - ai-shared
+
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen(
+              "http://127.0.0.1:8080/",
+              timeout=5,
+          )
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
 
   # -------------------------------------------------------------------------
   # n8n private database
@@ -339,6 +376,7 @@ volumes:
   huggingface-cache:
   vllm-cache:
   open-webui-data:
+  searxng-cache:
   n8n-data:
   n8n-db-data:
   rabbitmq-data:
