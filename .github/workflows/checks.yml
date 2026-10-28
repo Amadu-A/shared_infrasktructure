@@ -1,0 +1,20 @@
+# .github/workflows/checks.yml
+# Два тестовых файла и Bash syntax; контейнеры и сервер не используются.
+name: Infrastructure checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r requirements-dev.txt
+      - run: docker compose version
+      - run: python -m ruff check scripts tests
+      - run: python -m ruff format --check scripts tests
+      - run: python -B -m pytest -p no:cacheprovider -q
+      - run: bash -n scripts/bootstrap.sh && bash -n scripts/check.sh

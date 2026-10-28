@@ -1,7 +1,6 @@
-
 #!/usr/bin/env python3
 # scripts/check-vlm-tool-calling.py
-"""Read-only API contract smoke tests: no supplied tool is actually executed."""
+"""Проверяет API на synthetic-данных; предложенные инструменты реально не выполняет."""
 
 from __future__ import annotations
 
@@ -30,6 +29,7 @@ TOOL = {
 
 
 def request(url: str, payload: dict, timeout: int = 180) -> dict:
+    """Отправляет synthetic inference-запрос и возвращает JSON; инструмент не выполняет."""
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         url.rstrip("/") + "/chat/completions",
@@ -49,6 +49,7 @@ def request(url: str, payload: dict, timeout: int = 180) -> dict:
 
 
 def message(reply: dict) -> dict:
+    """Проверяет assistant message в OpenAI-compatible ответе."""
     assert reply["choices"], "Missing choices"
     result = reply["choices"][0]["message"]
     assert result["role"] == "assistant"
@@ -56,6 +57,7 @@ def message(reply: dict) -> dict:
 
 
 def assert_text(reply: dict) -> str:
+    """Проверяет непустой текст без неожиданных tools и сырой tool-разметки."""
     msg = message(reply)
     assert not msg.get("tool_calls"), "Unexpected tool_calls"
     content = msg.get("content")
@@ -67,6 +69,7 @@ def assert_text(reply: dict) -> str:
 
 
 def parsed_tool_call(reply: dict) -> dict:
+    """Проверяет единственный структурированный вызов и точные JSON arguments."""
     calls = message(reply).get("tool_calls")
     assert isinstance(calls, list) and len(calls) == 1, f"Invalid calls: {calls}"
     call = calls[0]
@@ -82,6 +85,7 @@ def parsed_tool_call(reply: dict) -> dict:
 
 
 def base(model: str, messages: list[dict], **kwargs: object) -> dict:
+    """Строит воспроизводимый synthetic-запрос с logical alias и ограничением токенов."""
     return {
         "model": model,
         "messages": messages,
@@ -94,9 +98,15 @@ def base(model: str, messages: list[dict], **kwargs: object) -> dict:
 
 
 def png_data_url() -> str:
+    """Создаёт маленькое красное изображение в памяти для vision smoke test."""
+
     def chunk(tag: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(
-            ">I", zlib.crc32(tag + data) & 0xFFFFFFFF
+        """Кодирует PNG chunk с длиной и контрольной суммой."""
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
         )
 
     raw = b"".join(b"\x00" + b"\xff\x00\x00" * 32 for _ in range(32))
@@ -110,13 +120,18 @@ def png_data_url() -> str:
 
 
 def main() -> int:
+    """Выполняет ограниченный набор API smoke tests без настоящих инструментов."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default="http://127.0.0.1:8000/v1")
     parser.add_argument("--model", default="shared-vlm")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--min-success", type=float, default=1.0)
-    parser.add_argument("--long-words", type=int, default=0,
-                        help="Optional long-context test; sends this many repetitions")
+    parser.add_argument(
+        "--long-words",
+        type=int,
+        default=0,
+        help="Optional long-context test; sends this many repetitions",
+    )
     parser.add_argument("--no-vision", action="store_true")
     args = parser.parse_args()
     if args.repeats < 1 or not 0 <= args.min_success <= 1:
@@ -125,20 +140,34 @@ def main() -> int:
     failures: list[str] = []
 
     def check(name: str, fn: object) -> None:
+        """Записывает исход одной проверки и продолжает остальные независимые сценарии."""
         try:
             fn()
             print(f"PASS {name}", flush=True)
-        except (AssertionError, ValueError, KeyError, TypeError, urllib.error.URLError) as exc:
+        except (
+            AssertionError,
+            ValueError,
+            KeyError,
+            TypeError,
+            urllib.error.URLError,
+        ) as exc:
             failures.append(name)
             print(f"FAIL {name}: {exc}", flush=True)
 
     def post(payload: dict) -> dict:
+        """Отправляет запрос к выбранному оператором base URL."""
         return request(args.url, payload)
 
     def text() -> None:
-        assert_text(post(base(args.model, [
-            {"role": "user", "content": "Ответь одним словом: РАБОТАЕТ"}
-        ])))
+        """Проверяет обычный ответ модели без tools."""
+        assert_text(
+            post(
+                base(
+                    args.model,
+                    [{"role": "user", "content": "Ответь одним словом: РАБОТАЕТ"}],
+                )
+            )
+        )
 
     check("A: text without tools", text)
 
@@ -148,11 +177,16 @@ def main() -> int:
             "role": "system",
             "content": "When asked to call check_status, call the tool; do not answer as text.",
         },
-        {"role": "user", "content": "Вызови функцию check_status с параметром check равным ready."},
+        {
+            "role": "user",
+            "content": "Вызови функцию check_status с параметром check равным ready.",
+        },
     ]
     for i in range(args.repeats):
         try:
-            result = post(base(args.model, tool_messages, tools=[TOOL], tool_choice="auto"))
+            result = post(
+                base(args.model, tool_messages, tools=[TOOL], tool_choice="auto")
+            )
             parsed_tool_call(result)
             succeeded.append(result)
             if len(succeeded) == 1:
@@ -161,7 +195,13 @@ def main() -> int:
                 sanitized.pop("id", None)
                 sanitized.pop("created", None)
                 print(json.dumps(sanitized, ensure_ascii=False, indent=2))
-        except (AssertionError, ValueError, KeyError, TypeError, urllib.error.URLError) as exc:
+        except (
+            AssertionError,
+            ValueError,
+            KeyError,
+            TypeError,
+            urllib.error.URLError,
+        ) as exc:
             print(f"FAIL B repetition {i + 1}: {exc}")
     rate = len(succeeded) / args.repeats
     print(f"B: tool_choice=auto {len(succeeded)}/{args.repeats} = {rate:.1%}")
@@ -171,36 +211,71 @@ def main() -> int:
         print("PASS B: structured tool_calls + name + JSON arguments")
 
     def continuation() -> None:
+        """Проверяет продолжение диалога после синтетического tool reply."""
         if not succeeded:
             raise AssertionError("No successful tool call to continue")
         call = parsed_tool_call(succeeded[0])
-        reply = post(base(args.model, [
-            *tool_messages,
-            {"role": "assistant", "content": None, "tool_calls": [call]},
-            {"role": "tool", "tool_call_id": call["id"], "name": "check_status",
-             "content": '{"check":"ready","status":"READY_CONFIRMED"}'},
-            {"role": "user", "content": "Какой статус вернул инструмент? Ответь текстом."},
-        ]))
+        reply = post(
+            base(
+                args.model,
+                [
+                    *tool_messages,
+                    {"role": "assistant", "content": None, "tool_calls": [call]},
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "name": "check_status",
+                        "content": '{"check":"ready","status":"READY_CONFIRMED"}',
+                    },
+                    {
+                        "role": "user",
+                        "content": "Какой статус вернул инструмент? Ответь текстом.",
+                    },
+                ],
+            )
+        )
         content = assert_text(reply)
-        assert ("ready" in content.lower() or "готов" in content.lower()), content
+        assert "ready" in content.lower() or "готов" in content.lower(), content
 
     check("C: continuation after tool reply", continuation)
 
     def none() -> None:
-        assert_text(post(base(args.model, [
-            {"role": "user", "content": "Ответь ровно: ОК"}
-        ], tools=[TOOL], tool_choice="none")))
+        """Проверяет запрет tool choice при переданном описании инструмента."""
+        assert_text(
+            post(
+                base(
+                    args.model,
+                    [{"role": "user", "content": "Ответь ровно: ОК"}],
+                    tools=[TOOL],
+                    tool_choice="none",
+                )
+            )
+        )
 
     check("D: tool_choice=none", none)
     check("D: no tools", text)
 
     def vision() -> None:
-        answer = assert_text(post(base(args.model, [
-            {"role": "user", "content": [
-                {"type": "text", "text": "Какого цвета изображение?"},
-                {"type": "image_url", "image_url": {"url": png_data_url()}},
-            ]},
-        ])))
+        """Проверяет распознавание красного synthetic-изображения."""
+        answer = assert_text(
+            post(
+                base(
+                    args.model,
+                    [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Какого цвета изображение?"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": png_data_url()},
+                                },
+                            ],
+                        },
+                    ],
+                )
+            )
+        )
         assert "red" in answer.lower() or "крас" in answer.lower(), answer
 
     if args.no_vision:
@@ -209,9 +284,11 @@ def main() -> int:
         check("E: vision", vision)
 
     def reasoning() -> None:
-        payload = base(args.model, [
-            {"role": "user", "content": "Сколько будет 2 + 2? Ответь кратко."}
-        ])
+        """Проверяет непустой ответ режима reasoning без неожиданного tool call."""
+        payload = base(
+            args.model,
+            [{"role": "user", "content": "Сколько будет 2 + 2? Ответь кратко."}],
+        )
         payload["chat_template_kwargs"] = {"enable_thinking": True}
         payload["max_tokens"] = 2048
         answer = post(payload)
@@ -222,14 +299,21 @@ def main() -> int:
     check("E: reasoning-mode response", reasoning)
 
     if args.long_words:
+
         def long_context() -> None:
-            content = "начало " + ("проверка " * args.long_words) + " конец. Ответь: ГОТОВО"
+            """Проверяет явно запрошенный длинный synthetic-контекст."""
+            content = (
+                "начало " + ("проверка " * args.long_words) + " конец. Ответь: ГОТОВО"
+            )
             assert_text(post(base(args.model, [{"role": "user", "content": content}])))
+
         check("E: long context", long_context)
     else:
         print("SKIP E: long context (pass --long-words to enable)")
 
-    print("Note: PDRD, Open WebUI and MTP regression require separate client/metrics checks.")
+    print(
+        "Note: PDRD, Open WebUI and MTP regression require separate client/metrics checks."
+    )
     if failures:
         print("FAILED:", ", ".join(failures))
         return 1
