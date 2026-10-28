@@ -1,42 +1,57 @@
 #!/usr/bin/env bash
 # scripts/bootstrap.sh
-# Первоначальная настройка уже установленного Docker и запуск выбранных сервисов.
-# Учётные записи создают штатные образы при первом запуске пустых volumes.
-# --check-only ничего не запускает и не меняет настройки системы.
+# Первоначальный безопасный запуск или точечная миграция старых AI helper-файлов.
+# Учётные записи создают только штатные образы при первом запуске пустых volumes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 check_only=false
+update_ai_helpers=false
 compose_args=()
 for argument in "$@"; do
-  if [[ "$argument" == --check-only ]]; then
-    check_only=true
-  else
-    compose_args+=("$argument")
-  fi
+  case "$argument" in
+    --check-only) check_only=true ;;
+    --update-ai-helpers) update_ai_helpers=true ;;
+    *) compose_args+=("$argument") ;;
+  esac
 done
 
-# До любых изменений проверяем тот же итоговый config, который получит Docker.
 python3 scripts/config-check.py validate "${compose_args[@]}"
+
+# Bootstrap не меняет настройки ОС. Исправление выполняет администратор отдельно.
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo '[ERROR] systemctl не найден. Проверьте запуск и автозапуск Docker средствами вашей ОС.' >&2
+  exit 1
+fi
+if ! systemctl is-enabled --quiet docker.service; then
+  echo '[ERROR] Docker не включён в автозапуск. Администратор может выполнить: sudo systemctl enable docker.service' >&2
+  exit 1
+fi
+if ! systemctl is-active --quiet docker.service; then
+  echo '[ERROR] Docker не запущен. Администратор может выполнить: sudo systemctl start docker.service' >&2
+  exit 1
+fi
+
 if "$check_only"; then
   exec python3 scripts/config-check.py prepare --check-only "${compose_args[@]}"
 fi
 
-# Сам Docker должен запускаться при загрузке ОС; отдельный manager для контейнеров не нужен.
-if command -v systemctl >/dev/null 2>&1; then
-  if ! systemctl is-enabled --quiet docker.service || ! systemctl is-active --quiet docker.service; then
-    if [[ "$EUID" -eq 0 ]]; then
-      systemctl enable --now docker.service
-    else
-      sudo systemctl enable --now docker.service
-    fi
+if "$update_ai_helpers"; then
+  python3 scripts/config-check.py prepare --check-only "${compose_args[@]}"
+  migration_output="$(python3 scripts/config-check.py migration-plan "${compose_args[@]}")"
+  read -r -a migration_services <<<"$migration_output"
+  if [[ "${#migration_services[@]}" -eq 0 ]]; then
+    echo 'Старые AI helper-mounts не обнаружены; контейнеры не изменены.'
+  else
+    for service in "${migration_services[@]}"; do
+      echo "Обновление только ${service} без зависимостей и force-recreate..."
+      docker compose "${compose_args[@]}" up -d --no-deps --wait --wait-timeout 1800 "$service"
+    done
   fi
-else
-  echo 'Проверьте автозапуск установленного Docker средствами вашей ОС.' >&2
-  exit 1
+  exec python3 scripts/config-check.py check "${compose_args[@]}"
 fi
 
 python3 scripts/config-check.py prepare "${compose_args[@]}"
-# Сохраняются restart policy, volumes и штатная инициализация пользователей.
-docker compose "${compose_args[@]}" up -d --wait --wait-timeout 1800
+# Обычный bootstrap создаёт отсутствующие сервисы, но не пересоздаёт существующие.
+docker compose "${compose_args[@]}" up -d --no-recreate --wait --wait-timeout 1800
 python3 scripts/config-check.py check "${compose_args[@]}"

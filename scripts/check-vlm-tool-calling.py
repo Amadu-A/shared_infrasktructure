@@ -99,10 +99,14 @@ def base(model: str, messages: list[dict], **kwargs: object) -> dict:
 
 def png_data_url() -> str:
     """Создаёт маленькое красное изображение в памяти для vision smoke test."""
+
     def chunk(tag: bytes, data: bytes) -> bytes:
         """Кодирует PNG chunk с длиной и контрольной суммой."""
-        return struct.pack(">I", len(data)) + tag + data + struct.pack(
-            ">I", zlib.crc32(tag + data) & 0xFFFFFFFF
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
         )
 
     raw = b"".join(b"\x00" + b"\xff\x00\x00" * 32 for _ in range(32))
@@ -122,8 +126,12 @@ def main() -> int:
     parser.add_argument("--model", default="shared-vlm")
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--min-success", type=float, default=1.0)
-    parser.add_argument("--long-words", type=int, default=0,
-                        help="Optional long-context test; sends this many repetitions")
+    parser.add_argument(
+        "--long-words",
+        type=int,
+        default=0,
+        help="Optional long-context test; sends this many repetitions",
+    )
     parser.add_argument("--no-vision", action="store_true")
     args = parser.parse_args()
     if args.repeats < 1 or not 0 <= args.min_success <= 1:
@@ -136,7 +144,13 @@ def main() -> int:
         try:
             fn()
             print(f"PASS {name}", flush=True)
-        except (AssertionError, ValueError, KeyError, TypeError, urllib.error.URLError) as exc:
+        except (
+            AssertionError,
+            ValueError,
+            KeyError,
+            TypeError,
+            urllib.error.URLError,
+        ) as exc:
             failures.append(name)
             print(f"FAIL {name}: {exc}", flush=True)
 
@@ -146,9 +160,14 @@ def main() -> int:
 
     def text() -> None:
         """Проверяет обычный ответ модели без tools."""
-        assert_text(post(base(args.model, [
-            {"role": "user", "content": "Ответь одним словом: РАБОТАЕТ"}
-        ])))
+        assert_text(
+            post(
+                base(
+                    args.model,
+                    [{"role": "user", "content": "Ответь одним словом: РАБОТАЕТ"}],
+                )
+            )
+        )
 
     check("A: text without tools", text)
 
@@ -158,11 +177,16 @@ def main() -> int:
             "role": "system",
             "content": "When asked to call check_status, call the tool; do not answer as text.",
         },
-        {"role": "user", "content": "Вызови функцию check_status с параметром check равным ready."},
+        {
+            "role": "user",
+            "content": "Вызови функцию check_status с параметром check равным ready.",
+        },
     ]
     for i in range(args.repeats):
         try:
-            result = post(base(args.model, tool_messages, tools=[TOOL], tool_choice="auto"))
+            result = post(
+                base(args.model, tool_messages, tools=[TOOL], tool_choice="auto")
+            )
             parsed_tool_call(result)
             succeeded.append(result)
             if len(succeeded) == 1:
@@ -171,7 +195,13 @@ def main() -> int:
                 sanitized.pop("id", None)
                 sanitized.pop("created", None)
                 print(json.dumps(sanitized, ensure_ascii=False, indent=2))
-        except (AssertionError, ValueError, KeyError, TypeError, urllib.error.URLError) as exc:
+        except (
+            AssertionError,
+            ValueError,
+            KeyError,
+            TypeError,
+            urllib.error.URLError,
+        ) as exc:
             print(f"FAIL B repetition {i + 1}: {exc}")
     rate = len(succeeded) / args.repeats
     print(f"B: tool_choice=auto {len(succeeded)}/{args.repeats} = {rate:.1%}")
@@ -185,35 +215,67 @@ def main() -> int:
         if not succeeded:
             raise AssertionError("No successful tool call to continue")
         call = parsed_tool_call(succeeded[0])
-        reply = post(base(args.model, [
-            *tool_messages,
-            {"role": "assistant", "content": None, "tool_calls": [call]},
-            {"role": "tool", "tool_call_id": call["id"], "name": "check_status",
-             "content": '{"check":"ready","status":"READY_CONFIRMED"}'},
-            {"role": "user", "content": "Какой статус вернул инструмент? Ответь текстом."},
-        ]))
+        reply = post(
+            base(
+                args.model,
+                [
+                    *tool_messages,
+                    {"role": "assistant", "content": None, "tool_calls": [call]},
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "name": "check_status",
+                        "content": '{"check":"ready","status":"READY_CONFIRMED"}',
+                    },
+                    {
+                        "role": "user",
+                        "content": "Какой статус вернул инструмент? Ответь текстом.",
+                    },
+                ],
+            )
+        )
         content = assert_text(reply)
-        assert ("ready" in content.lower() or "готов" in content.lower()), content
+        assert "ready" in content.lower() or "готов" in content.lower(), content
 
     check("C: continuation after tool reply", continuation)
 
     def none() -> None:
         """Проверяет запрет tool choice при переданном описании инструмента."""
-        assert_text(post(base(args.model, [
-            {"role": "user", "content": "Ответь ровно: ОК"}
-        ], tools=[TOOL], tool_choice="none")))
+        assert_text(
+            post(
+                base(
+                    args.model,
+                    [{"role": "user", "content": "Ответь ровно: ОК"}],
+                    tools=[TOOL],
+                    tool_choice="none",
+                )
+            )
+        )
 
     check("D: tool_choice=none", none)
     check("D: no tools", text)
 
     def vision() -> None:
         """Проверяет распознавание красного synthetic-изображения."""
-        answer = assert_text(post(base(args.model, [
-            {"role": "user", "content": [
-                {"type": "text", "text": "Какого цвета изображение?"},
-                {"type": "image_url", "image_url": {"url": png_data_url()}},
-            ]},
-        ])))
+        answer = assert_text(
+            post(
+                base(
+                    args.model,
+                    [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Какого цвета изображение?"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": png_data_url()},
+                                },
+                            ],
+                        },
+                    ],
+                )
+            )
+        )
         assert "red" in answer.lower() or "крас" in answer.lower(), answer
 
     if args.no_vision:
@@ -223,9 +285,10 @@ def main() -> int:
 
     def reasoning() -> None:
         """Проверяет непустой ответ режима reasoning без неожиданного tool call."""
-        payload = base(args.model, [
-            {"role": "user", "content": "Сколько будет 2 + 2? Ответь кратко."}
-        ])
+        payload = base(
+            args.model,
+            [{"role": "user", "content": "Сколько будет 2 + 2? Ответь кратко."}],
+        )
         payload["chat_template_kwargs"] = {"enable_thinking": True}
         payload["max_tokens"] = 2048
         answer = post(payload)
@@ -236,15 +299,21 @@ def main() -> int:
     check("E: reasoning-mode response", reasoning)
 
     if args.long_words:
+
         def long_context() -> None:
             """Проверяет явно запрошенный длинный synthetic-контекст."""
-            content = "начало " + ("проверка " * args.long_words) + " конец. Ответь: ГОТОВО"
+            content = (
+                "начало " + ("проверка " * args.long_words) + " конец. Ответь: ГОТОВО"
+            )
             assert_text(post(base(args.model, [{"role": "user", "content": content}])))
+
         check("E: long context", long_context)
     else:
         print("SKIP E: long context (pass --long-words to enable)")
 
-    print("Note: PDRD, Open WebUI and MTP regression require separate client/metrics checks.")
+    print(
+        "Note: PDRD, Open WebUI and MTP regression require separate client/metrics checks."
+    )
     if failures:
         print("FAILED:", ", ".join(failures))
         return 1

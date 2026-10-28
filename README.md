@@ -51,11 +51,30 @@
 Можно отключить необязательный UI, убрав ai-ui. Для ai-ui нужен также ai-vlm.
 При отключённых inference-профилях проверка не требует NVIDIA.
 
-Обязательные секреты: N8N_DB_PASSWORD, N8N_ENCRYPTION_KEY,
-RABBITMQ_DEFAULT_PASS. OPEN_WEBUI_SECRET_KEY нужен только для UI.
-На новой установке для каждого секрета отдельно выполнить openssl rand -hex 32
-и записать результат в закрытый .env с правами 600. Действующие секреты
-существующей установки не менять.
+Основные параметры:
+
+| Переменная | Назначение |
+|---|---|
+| `COMPOSE_PROFILES` | Включённые AI-профили: `ai-vlm,ai-embedding,ai-ui` |
+| `SHARED_NETWORK_NAME` | Существующая external-сеть, обычно `ai-shared` |
+| `SHARED_*_GPU_DEVICES` | GPU из серверного `.env`; Python их не выбирает |
+| `SHARED_*_TP_SIZE`, `SHARED_*_DP_SIZE` | Должны соответствовать числу GPU: `TP × DP` |
+| `SHARED_*_MAX_MODEL_LEN` | Явный контекст каждой модели |
+| `RABBITMQ_REQUIRED_VHOSTS` | Существующие обязательные vhost через запятую; ничего не создаёт |
+| `*_BIND_IP`, `*_HOST_PORT` | Публикация сервисов на host |
+
+Обязательные секреты: `N8N_DB_PASSWORD`, `N8N_ENCRYPTION_KEY`,
+`RABBITMQ_DEFAULT_PASS`. `OPEN_WEBUI_SECRET_KEY` нужен только для UI. На новой
+установке генерировать каждый секрет отдельно; вывод не сохранять в shell history
+или Git:
+
+    openssl rand -hex 32
+    umask 077
+    cp .env.example .env
+    chmod 600 .env
+
+В `.env` заменить placeholders вручную. Действующие секреты существующей
+установки не менять и `.env.example` поверх `.env` не копировать.
 
 Рабочая модель — Qwen/Qwen3.8-27B, VLM использует GPU 2,3, embedding — GPU 1.
 SHARED_VLM_TP_SIZE, SHARED_VLM_DP_SIZE и SHARED_VLM_MAX_MODEL_LEN задаются явно
@@ -76,9 +95,10 @@ main у Hugging Face изменяем; точный SHA закрепляется
     cd /projects/shared-infrastructure
     bash scripts/bootstrap.sh
 
-Bootstrap проверяет настройки, при необходимости включает автозапуск уже
-установленного Docker, создаёт отсутствующую согласованную shared-сеть,
-запускает выбранные сервисы и ждёт их готовности до 30 минут.
+Bootstrap проверяет, что Docker уже запущен и включён в автозапуск, создаёт
+отсутствующую согласованную shared-сеть и запускает выбранные сервисы. Системные
+настройки он не меняет. При ошибке администратор отдельно выполняет указанную
+команду `systemctl`, после чего повторяет bootstrap.
 
 Пользователь базы n8n и начальный администратор RabbitMQ создаются штатными
 образами при первом запуске пустых volumes. Имена, секреты и порядок этой
@@ -86,9 +106,9 @@ Bootstrap проверяет настройки, при необходимост
 пароли, базы и очереди не пересоздаются. Проектные пользователи/vhost брокера
 по-прежнему добавляются отдельной согласованной административной операцией.
 
-На работающем сервере bootstrap не является повседневной диагностикой:
-docker compose up может применить изменившуюся конфигурацию контейнеров.
-Обновления применяются отдельно, только к согласованным сервисам.
+Обычный bootstrap использует `docker compose up --no-recreate`: он создаёт
+отсутствующие сервисы, но не применяет новую конфигурацию к работающим контейнерам.
+Обновления выполняются отдельной явной процедурой ниже.
 
 Проверка подготовки без изменения системы и запуска контейнеров:
 
@@ -98,8 +118,8 @@ docker compose up может применить изменившуюся кон�
 
 ## Перезагрузка сервера
 
-Bootstrap включает Docker в загрузку ОС. Для всех сервисов сохранена существующая
-политика restart: unless-stopped. После штатной перезагрузки ранее работающие
+Bootstrap только проверяет автозапуск Docker. Для всех сервисов сохранена политика
+`restart: unless-stopped`. После штатной перезагрузки ранее работающие
 контейнеры поднимаются Docker, VLM заново загружает выбранную модель. Веса
 сохраняются в named volume huggingface-cache, данные остальных сервисов — в
 их собственных постоянных volumes. Повторный bootstrap после reboot не нужен.
@@ -108,11 +128,17 @@ Bootstrap включает Docker в загрузку ОС. Для всех се
 семантика unless-stopped. После docker compose down контейнеры нужно создать
 заново. Во время загрузки большой модели API ещё может быть неготов.
 
-После reboot:
+Проверка реального восстановления без `compose up` и без изменения конфигурации:
 
     systemctl is-enabled docker.service
     systemctl is-active docker.service
-    bash scripts/check.sh
+    python3 scripts/config-check.py reboot-snapshot --state-file /tmp/shared-reboot.json
+    sudo systemctl restart docker.service
+    python3 scripts/config-check.py reboot-verify --state-file /tmp/shared-reboot.json
+
+Последняя команда ждёт health до 30 минут, требует те же container ID и named
+volumes, повторно проверяет API и RabbitMQ. Это эксплуатационная проверка:
+выполнять её только в согласованное окно. Файл snapshot не содержит env или секреты.
 
 Основание: [Docker restart policies](https://docs.docker.com/engine/containers/start-containers-automatically/)
 и [Docker systemd autostart](https://docs.docker.com/engine/install/linux-postinstall/).
@@ -123,9 +149,18 @@ Bootstrap включает Docker в загрузку ОС. Для всех се
 
     bash scripts/check.sh
 
-Скрипт проверяет итоговый Compose, ожидаемые и уже работающие AI-сервисы,
-health и логические имена из /v1/models. Отсутствующий включённый сервис —
-ошибка. Секреты и полный config/inspect не печатаются.
+Скрипт проверяет итоговый Compose, контейнеры, health и логические имена из
+`/v1/models`. Для RabbitMQ проверяются работающий broker, AMQP-порт, реальная
+авторизация существующего администратора через Management API, наличие
+`RABBITMQ_REQUIRED_VHOSTS` и права пользователя на них. Пользователи, пароли и
+vhost не создаются и не изменяются. Секреты и полный config/inspect не печатаются.
+
+Полная локальная и runtime-проверка одной командой (после установки dev-зависимостей):
+
+    python3 -m pip install -r requirements-dev.txt
+    bash scripts/check.sh --with-tests
+
+Она последовательно запускает проверки Compose/контейнеров/API, Ruff и pytest.
 
 Отдельная проверка только настроек:
 
@@ -164,14 +199,52 @@ n8n-db доступна только n8n через n8n-internal и не пуб�
 Bootstrap admin RabbitMQ не используется приложениями. Для workflow n8n
 сохраняются префиксы проекта вроде [PDRD] и [CONTRACT].
 
+Минимальный Compose-фрагмент приложения на том же сервере:
+
+```yaml
+services:
+  app:
+    image: example/app:latest
+    environment:
+      VLM_BASE_URL: http://shared-vlm:8000/v1
+      VLM_MODEL: shared-vlm
+      EMBEDDING_BASE_URL: http://shared-embedding:8000/v1
+      EMBEDDING_MODEL: shared-embedding
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: "5672"
+      # Логин, пароль и vhost приложения берутся из его собственного закрытого env.
+    networks:
+      - app-private
+      - ai-shared
+
+networks:
+  app-private:
+  ai-shared:
+    external: true
+    name: ai-shared
+```
+
+База приложения остаётся только в `app-private`; `n8n-db` подключать запрещено.
+
 ## Обновление и ручная смена модели
 
-Установка кода не переключает работающую модель. Новый формат использует один
-config-check.py вместо удалённых helper/entrypoint-файлов. Поэтому при переходе
-со старой версии до следующей перезагрузки требуется согласованно пересоздать
-shared-vlm, shared-embedding и open-webui: старые контейнеры могут ссылаться
-на удалённые host-файлы. Их текущую конфигурацию и секреты предварительно сверить
-и сохранить. В рамках локальной разработки эти операции не выполняются.
+Установка кода не переключает работающую модель. После обновления репозитория и
+**до перезагрузки Docker/сервера** выполнить согласованную миграцию старых mount
+`vlm-entrypoint.py`, `deployment.py` и `open-webui-entrypoint.sh`:
+
+    bash scripts/bootstrap.sh --check-only
+    bash scripts/bootstrap.sh --update-ai-helpers
+
+Режим сам находит только существующие контейнеры со старыми helper-mounts и
+последовательно применяет новый `config-check.py` к `shared-vlm`,
+`shared-embedding`, `open-webui`. Используются `--no-deps` и обычный Compose
+reconcile без `--force-recreate`; базовые сервисы, сети, users и volumes не
+затрагиваются. Если старых mounts нет, контейнеры не изменяются.
+
+Rollback при ошибке: остановить процедуру, вернуть предыдущую версию кода,
+затем применить её только к уже затронутому сервису командой
+`docker compose up -d --no-deps <service>` и выполнить `bash scripts/check.sh`.
+`down -v`, `--remove-orphans` и массовый `--force-recreate` запрещены.
 
 Для дальнейшей смены модели — нормативный порядок
 [Infrastructure §9](docs/INFRASTRUCTURE_INSTRUCTIONS.md#9-gpu-и-hardware-portability):
@@ -180,7 +253,7 @@ shared-vlm, shared-embedding и open-webui: старые контейнеры м
 проверить настройки и применить изменение только к VLM:
 
     python3 scripts/config-check.py validate --profile ai-vlm
-    docker compose --profile ai-vlm up -d --no-deps --force-recreate shared-vlm
+    docker compose --profile ai-vlm up -d --no-deps shared-vlm
     bash scripts/check.sh --profile ai-vlm
 
 Rollback: вернуть прежние согласованные параметры .env и соответствующую версию
@@ -204,8 +277,10 @@ environment/command. Не удалять чужой или старый override
 Минимальные тесты в двух файлах; дополнительные сервисы или модель им не нужны:
 
     python -m pip install -r requirements-dev.txt
+    python -m ruff check scripts tests
+    python -m ruff format --check scripts tests
     python -B -m pytest -p no:cacheprovider -q
 
 Для проверки приоритета настроек часть тестов вызывает только Compose config
 на временных env-файлах, без Docker daemon и без запуска контейнеров.
-CI запускает эти тесты и проверяет синтаксис двух Bash-скриптов.
+CI запускает Ruff, тесты и проверяет синтаксис двух Bash-скриптов.

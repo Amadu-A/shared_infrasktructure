@@ -269,6 +269,7 @@ services:
       bind_ip_environment_variable: RABBITMQ_BIND_IP
       amqp_port_environment_variable: RABBITMQ_AMQP_HOST_PORT
       management_port_environment_variable: RABBITMQ_MANAGEMENT_HOST_PORT
+      required_vhosts_environment_variable: RABBITMQ_REQUIRED_VHOSTS
       default_amqp_host_port: 5672
       default_management_host_port: 15672
       amqp_endpoint_template: <SHARED_PUBLIC_HOST>:5672

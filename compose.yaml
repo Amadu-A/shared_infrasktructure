@@ -307,6 +307,8 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-shared_admin}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?RABBITMQ_DEFAULT_PASS must be set in .env or process environment}
+      # Проверяется через Management API; этот список не создаёт и не меняет vhost.
+      RABBITMQ_REQUIRED_VHOSTS: ${RABBITMQ_REQUIRED_VHOSTS:-/}
 
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
