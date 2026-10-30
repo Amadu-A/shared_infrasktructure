@@ -207,7 +207,8 @@ def validate_docling(config: dict) -> None:
         raise ConfigError(
             "Docling должен монтировать только закреплённый rus.traineddata."
         )
-    if (mount.get("bind") or {}).get("create_host_path") is not False:
+    # Compose v2 опускает false при JSON-сериализации; true остаётся явным.
+    if (mount.get("bind") or {}).get("create_host_path", False) is not False:
         raise ConfigError(
             "Compose не должен подменять отсутствующую tessdata каталогом."
         )

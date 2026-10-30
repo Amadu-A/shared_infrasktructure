@@ -214,6 +214,22 @@ def test_docling_rejects_additional_public_binding(render_docling):
         config.validate_docling(resolved)
 
 
+@pytest.mark.parametrize("bind", [{}, {"create_host_path": False}])
+def test_docling_accepts_false_omitted_by_compose_v2(render_docling, bind):
+    """Валидатор принимает оба JSON-представления create_host_path: false."""
+    resolved = render_docling()
+    resolved["services"]["docling"]["volumes"][0]["bind"] = bind
+    config.validate_docling(resolved)
+
+
+def test_docling_rejects_host_path_creation(render_docling):
+    """Совместимость с Compose v2 не разрешает создавать каталог вместо tessdata."""
+    resolved = render_docling()
+    resolved["services"]["docling"]["volumes"][0]["bind"] = {"create_host_path": True}
+    with pytest.raises(config.ConfigError):
+        config.validate_docling(resolved)
+
+
 def test_docling_tessdata_download_and_idempotency(tmp_path, monkeypatch):
     """Tessdata скачивается атомарно, проверяется и повторно не загружается."""
     payload = b"pinned-russian-tessdata"
