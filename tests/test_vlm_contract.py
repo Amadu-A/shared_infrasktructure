@@ -70,7 +70,27 @@ def test_restart_cache_network_and_existing_accounts():
         compose["services"]["n8n-db"]["environment"]["POSTGRES_USER"]
         == "${N8N_DB_USER:-n8n}"
     )
+    assert compose["services"]["searxng"]["profiles"] == ["ai-search"]
+    assert (ROOT / "searxng/settings.yml").is_file()
+
+    docling = yaml.safe_load(
+        (ROOT / "docling-eval/compose.yaml").read_text(encoding="utf-8")
+    )
+    service = docling["services"]["docling"]
+    assert docling["name"] == "docling-eval"
+    assert service["restart"] == "unless-stopped"
+    assert service["ports"] == ["127.0.0.1:${DOCLING_HOST_PORT:-5001}:5001"]
+    assert service["cap_drop"] == ["ALL"]
+    assert service["volumes"][0]["read_only"] is True
+    assert service["volumes"][0]["bind"]["create_host_path"] is False
+    assert docling["networks"]["ai-shared"]["name"] == (
+        "${SHARED_NETWORK_NAME:-ai-shared}"
+    )
+    registry = yaml.safe_load((ROOT / "docs/services.yaml").read_text(encoding="utf-8"))
+    assert set(registry["services"]) == set(compose["services"]) | {"docling"}
+    assert registry["services"]["docling"]["compose_project_name"] == "docling-eval"
 
     bootstrap = (ROOT / "scripts/bootstrap.sh").read_text(encoding="utf-8")
     assert "--no-recreate" in bootstrap
     assert "systemctl enable --now" not in bootstrap
+    assert "docling-start" in bootstrap

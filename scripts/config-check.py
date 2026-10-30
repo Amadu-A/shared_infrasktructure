@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 # scripts/config-check.py
-"""Проверки Compose, готовности сервисов и параметров перед запуском моделей.
+"""Проверки Compose, сервисов и закреплённого OCR-артефакта Docling.
 
 Значения разрешает сам Compose: окружение команды > .env > разрешённые defaults.
-Закрытые config/inspect остаются в памяти. Модели и пользователи здесь не меняются.
+Закрытые config/inspect остаются в памяти. VLM weights и пользователи не меняются.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -21,11 +23,22 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+DOCLING_DIR = ROOT / "docling-eval"
+DOCLING_COMPOSE_FILE = DOCLING_DIR / "compose.yaml"
+DOCLING_TESSDATA_PATH = DOCLING_DIR / "tessdata" / "rus.traineddata"
+DOCLING_TESSDATA_URL = (
+    "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/"
+    "87416418657359cb625c412a48b6e1d6d41c29bd/rus.traineddata"
+)
+DOCLING_TESSDATA_SHA256 = (
+    "e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225"
+)
 AI_PROFILES = {
     "shared-vlm": "ai-vlm",
     "shared-embedding": "ai-embedding",
     "open-webui": "ai-ui",
 }
+OPTIONAL_PROFILES = {**AI_PROFILES, "searxng": "ai-search"}
 INFERENCE_SERVICES = {"shared-vlm", "shared-embedding"}
 LEGACY_HELPERS = ("vlm-entrypoint.py", "deployment.py", "open-webui-entrypoint.sh")
 SERVICE_ORDER = ("shared-vlm", "shared-embedding", "open-webui")
@@ -34,6 +47,8 @@ SECRETS = {
     "n8n": ("DB_POSTGRESDB_PASSWORD", "N8N_ENCRYPTION_KEY"),
     "rabbitmq": ("RABBITMQ_DEFAULT_PASS",),
     "open-webui": ("WEBUI_SECRET_KEY",),
+    "searxng": ("SEARXNG_SECRET",),
+    "docling": ("DOCLING_SERVE_API_KEY",),
 }
 
 
@@ -61,10 +76,33 @@ def compose_args(profiles: list[str], env_file: str | None) -> list[str]:
     return args
 
 
+def docling_compose_args(env_file: str | None) -> list[str]:
+    """Строит изолированную Compose-команду Docling с тем же env precedence."""
+    args = [
+        "docker",
+        "compose",
+        "--project-name",
+        "docling-eval",
+        "--project-directory",
+        str(DOCLING_DIR),
+    ]
+    effective_env_file = Path(env_file) if env_file else ROOT / ".env"
+    if env_file or effective_env_file.is_file():
+        args += ["--env-file", str(effective_env_file)]
+    return [*args, "-f", str(DOCLING_COMPOSE_FILE)]
+
+
 def load_config(profiles: list[str], env_file: str | None) -> dict:
     """Читает итоговый JSON Compose без отдельного dotenv-парсера."""
     return json.loads(
         run(*compose_args(profiles, env_file), "config", "--format", "json").stdout
+    )
+
+
+def load_docling_config(env_file: str | None) -> dict:
+    """Читает итоговый JSON отдельного Docling Compose без dotenv-парсера."""
+    return json.loads(
+        run(*docling_compose_args(env_file), "config", "--format", "json").stdout
     )
 
 
@@ -132,6 +170,132 @@ def validate(config: dict) -> None:
             raise ConfigError(
                 f"{name}: количество GPU должно совпадать с TP × DP; context должен быть положительным."
             )
+
+
+def validate_docling(config: dict) -> None:
+    """Проверяет изоляцию, secret и read-only OCR-модель Docling Compose."""
+    validate(config)
+    if config.get("name") != "docling-eval" or set(config["services"]) != {"docling"}:
+        raise ConfigError("Docling должен использовать отдельный project name.")
+    service = config.get("services", {}).get("docling")
+    if not isinstance(service, dict):
+        raise ConfigError("Docling Compose не содержит обязательный сервис docling.")
+    environment = service.get("environment") or {}
+    if str(environment.get("DOCLING_SERVE_ENABLE_REMOTE_SERVICES", "")).lower() != (
+        "false"
+    ):
+        raise ConfigError("Docling remote services должны быть отключены.")
+    bindings = service.get("ports", [])
+    if len(bindings) != 1 or any(
+        item.get("host_ip") != "127.0.0.1" or int(item.get("target", 0)) != 5001
+        for item in bindings
+    ):
+        raise ConfigError("Docling host port должен быть привязан к 127.0.0.1.")
+    if environment.get("DOCLING_DEVICE") != "cpu":
+        raise ConfigError("Docling evaluation должен использовать CPU.")
+    mount = next(
+        (
+            item
+            for item in service.get("volumes", [])
+            if item.get("target") == "/usr/share/tesseract/tessdata/rus.traineddata"
+        ),
+        None,
+    )
+    if not mount or not mount.get("read_only") or mount.get("type") != "bind":
+        raise ConfigError("Русская tessdata должна монтироваться read-only bind mount.")
+    if Path(str(mount.get("source", ""))).resolve() != DOCLING_TESSDATA_PATH.resolve():
+        raise ConfigError(
+            "Docling должен монтировать только закреплённый rus.traineddata."
+        )
+    if (mount.get("bind") or {}).get("create_host_path") is not False:
+        raise ConfigError(
+            "Compose не должен подменять отсутствующую tessdata каталогом."
+        )
+    if "ALL" not in service.get("cap_drop", []):
+        raise ConfigError("Docling должен запускаться без Linux capabilities.")
+    if "no-new-privileges:true" not in service.get("security_opt", []):
+        raise ConfigError("Docling должен запрещать повышение privileges.")
+    network = config.get("networks", {}).get("ai-shared") or {}
+    if not network.get("external"):
+        raise ConfigError(
+            "Docling должен использовать существующую external ai-shared."
+        )
+
+
+def print_settings(config: dict) -> None:
+    """Показывает разрешённые поля итогового Compose и наличие secrets без их значений."""
+    print(f"[SETTINGS] project={json.dumps(config['name'])}")
+    print(f"[SETTINGS] services={','.join(sorted(config['services']))}")
+    network = config.get("networks", {}).get("ai-shared", {}).get("name")
+    print(f"[SETTINGS] SHARED_NETWORK_NAME={json.dumps(network)}")
+    for name, service in config["services"].items():
+        for port in service.get("ports", []):
+            binding = {key: port.get(key) for key in ("host_ip", "published", "target")}
+            print(f"[SETTINGS] {name}.port={json.dumps(binding)}")
+        for key in SECRETS.get(name, ()):
+            state = "set" if (service.get("environment") or {}).get(key) else "not set"
+            print(f"[SETTINGS] {name}.{key}=<redacted: {state}>")
+
+
+def file_sha256(path: Path) -> str:
+    """Вычисляет SHA-256 локального model artifact потоково."""
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def prepare_docling_tessdata(check_only: bool) -> None:
+    """Проверяет или атомарно скачивает закреплённую русскую модель Tesseract."""
+    if (
+        DOCLING_TESSDATA_PATH.is_file()
+        and DOCLING_TESSDATA_PATH.stat().st_size > 0
+        and file_sha256(DOCLING_TESSDATA_PATH) == DOCLING_TESSDATA_SHA256
+    ):
+        if not check_only:
+            DOCLING_TESSDATA_PATH.chmod(0o644)
+        print(f"DOCLING TESSDATA OK: {DOCLING_TESSDATA_SHA256}")
+        return
+    if check_only:
+        raise ConfigError(
+            "Docling rus.traineddata отсутствует или не совпадает с закреплённым SHA-256."
+        )
+    DOCLING_TESSDATA_PATH.parent.mkdir(parents=True, exist_ok=True)
+    temporary = DOCLING_TESSDATA_PATH.with_name(
+        f"{DOCLING_TESSDATA_PATH.name}.tmp.{os.getpid()}"
+    )
+    try:
+        last_error: OSError | None = None
+        for _attempt in range(3):
+            try:
+                with (
+                    urllib.request.urlopen(
+                        DOCLING_TESSDATA_URL, timeout=120
+                    ) as response,
+                    temporary.open("wb") as output,
+                ):
+                    shutil.copyfileobj(response, output)
+                break
+            except OSError as exc:
+                last_error = exc
+                temporary.unlink(missing_ok=True)
+        else:
+            raise ConfigError(
+                "Не удалось скачать закреплённый Docling rus.traineddata после трёх попыток."
+            ) from last_error
+        if temporary.stat().st_size <= 0:
+            raise ConfigError("Скачанный Docling rus.traineddata пуст.")
+        actual = file_sha256(temporary)
+        if actual != DOCLING_TESSDATA_SHA256:
+            raise ConfigError(
+                "SHA-256 скачанного Docling rus.traineddata не совпадает с закреплённым."
+            )
+        temporary.chmod(0o644)
+        temporary.replace(DOCLING_TESSDATA_PATH)
+    finally:
+        temporary.unlink(missing_ok=True)
+    print(f"DOCLING TESSDATA DOWNLOADED: {DOCLING_TESSDATA_SHA256}")
 
 
 def guard(name: str, command: list[str]) -> int:
@@ -297,6 +461,54 @@ def check_rabbitmq(service: dict, item: dict) -> None:
         )
 
 
+def check_docling(service: dict, item: dict) -> None:
+    """Проверяет фактический доступ, secret, health и языки Docling без recreate."""
+    current = item.get("Config") or {}
+    environment = dict(
+        value.split("=", 1) for value in current.get("Env", []) if "=" in value
+    )
+    if current.get("Image") != service.get("image") or any(
+        environment.get(key) != str(value)
+        for key, value in (service.get("environment") or {}).items()
+    ):
+        raise ConfigError("Docling image/environment отличаются от Compose.")
+    host = item.get("HostConfig") or {}
+    binding = service["ports"][0]
+    expected_ports = {
+        "5001/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(binding["published"])}]
+    }
+    if host.get("PortBindings") != expected_ports:
+        raise ConfigError("Docling фактически публикует другой host port/bind IP.")
+    if "ALL" not in host.get("CapDrop", []) or not any(
+        option in host.get("SecurityOpt", [])
+        for option in ("no-new-privileges", "no-new-privileges:true")
+    ):
+        raise ConfigError(
+            "Docling фактически запущен без согласованных security options."
+        )
+    if not any(
+        mount.get("Destination") == "/usr/share/tesseract/tessdata/rus.traineddata"
+        and mount.get("Type") == "bind"
+        and mount.get("RW") is False
+        for mount in item.get("Mounts", [])
+    ):
+        raise ConfigError(
+            "Docling фактически не использует read-only tessdata bind mount."
+        )
+    http_get(url(service, 5001, "/health"))
+    result = run(
+        "docker",
+        "exec",
+        item["Id"],
+        "tesseract",
+        "--list-langs",
+        check=False,
+    )
+    languages = set(result.stdout.split())
+    if result.returncode or not {"rus", "eng", "osd"}.issubset(languages):
+        raise ConfigError("Docling не видит обязательные языки Tesseract.")
+
+
 def check_services(config: dict, actual: dict) -> bool:
     """Проверяет ожидаемые контейнеры, health и доступность логических моделей."""
     success = True
@@ -351,6 +563,8 @@ def check_services(config: dict, actual: dict) -> bool:
                 http_get(url(service, port, path))
             elif name == "rabbitmq":
                 check_rabbitmq(service, item)
+            elif name == "docling":
+                check_docling(service, item)
             print(f"[OK] {name}")
         except (ConfigError, OSError, ValueError, KeyError, TypeError, StopIteration):
             success = False
@@ -411,7 +625,7 @@ def verify_restart(before: dict, after: dict) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Проверяет конфигурацию; prepare создаёт сеть, check ничего не меняет."""
+    """Координирует безопасные prepare/check для основного stack и Docling."""
     argv = sys.argv[1:] if argv is None else argv
     try:
         if argv[:1] == ["guard"]:
@@ -425,6 +639,10 @@ def main(argv: list[str] | None = None) -> int:
                 "validate",
                 "prepare",
                 "check",
+                "docling-validate",
+                "docling-prepare",
+                "docling-start",
+                "docling-check",
                 "migration-plan",
                 "reboot-snapshot",
                 "reboot-verify",
@@ -433,15 +651,62 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--profile", action="append", default=[])
         parser.add_argument("--env-file")
         parser.add_argument("--check-only", action="store_true")
+        parser.add_argument("--show-settings", action="store_true")
         parser.add_argument("--state-file")
         parser.add_argument("--wait-timeout", type=int, default=1800)
         args = parser.parse_args(argv)
+        docling_actions = {
+            "docling-validate",
+            "docling-prepare",
+            "docling-start",
+            "docling-check",
+        }
+        if args.action in docling_actions:
+            config = load_docling_config(args.env_file)
+            validate_docling(config)
+            if args.show_settings:
+                print_settings(config)
+            if args.action == "docling-validate":
+                print("DOCLING CONFIG OK")
+                return 0
+            run("docker", "info")
+            network = config["networks"]["ai-shared"]["name"]
+            if run("docker", "network", "inspect", network, check=False).returncode:
+                raise ConfigError(
+                    "Shared-сеть Docling отсутствует; сначала выполните prepare основного stack."
+                )
+            prepare_docling_tessdata(
+                check_only=args.check_only or args.action == "docling-check"
+            )
+            if args.action == "docling-prepare" or (
+                args.action == "docling-start" and args.check_only
+            ):
+                print("DOCLING PREPARE OK")
+                return 0
+            if args.action == "docling-start":
+                run(
+                    *docling_compose_args(args.env_file),
+                    "up",
+                    "-d",
+                    "--no-recreate",
+                    "--wait",
+                    "--wait-timeout",
+                    str(args.wait_timeout),
+                )
+            actual = containers(config["name"])
+            if not check_services(config, actual):
+                print("ONE OR MORE CHECKS FAILED")
+                return 1
+            print("DOCLING CHECK PASSED")
+            return 0
         if args.action in ("migration-plan", "reboot-snapshot", "reboot-verify"):
             args.profile = list(
                 dict.fromkeys(args.profile + list(AI_PROFILES.values()))
             )
         config = load_config(args.profile, args.env_file)
         validate(config)
+        if args.show_settings:
+            print_settings(config)
         if args.action == "validate":
             print("CONFIG OK")
             return 0
@@ -457,9 +722,9 @@ def main(argv: list[str] | None = None) -> int:
             print(" ".join(migration_services(config, actual)))
             return 0
         extra = [
-            AI_PROFILES[name]
+            OPTIONAL_PROFILES[name]
             for name, item in actual.items()
-            if name in AI_PROFILES
+            if name in OPTIONAL_PROFILES
             and item["State"].get("Running")
             and name not in config["services"]
         ]
@@ -486,10 +751,30 @@ def main(argv: list[str] | None = None) -> int:
             print("ONE OR MORE CHECKS FAILED")
             return 1
         if args.action in ("reboot-snapshot", "reboot-verify"):
+            docling_config = load_docling_config(args.env_file)
+            validate_docling(docling_config)
+            prepare_docling_tessdata(check_only=True)
+            if args.action == "reboot-verify":
+                docling_actual = wait_healthy(
+                    docling_config["name"],
+                    set(docling_config["services"]),
+                    args.wait_timeout,
+                )
+            else:
+                docling_actual = containers(docling_config["name"])
+            if not check_services(docling_config, docling_actual):
+                print("ONE OR MORE CHECKS FAILED")
+                return 1
             if not args.state_file:
                 raise ConfigError("Для reboot-проверки требуется --state-file.")
             path = Path(args.state_file)
             current = restart_state(actual)
+            current.update(
+                {
+                    f"docling-eval/{name}": state
+                    for name, state in restart_state(docling_actual).items()
+                }
+            )
             if args.action == "reboot-snapshot":
                 path.write_text(json.dumps(current, indent=2), encoding="utf-8")
                 print(f"REBOOT SNAPSHOT SAVED: {path}")

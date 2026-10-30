@@ -1,7 +1,9 @@
 # tests/test_config.py
 """Небольшая регрессия настроек Compose и отказа до побочных действий."""
 
+import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -45,6 +47,7 @@ def render(tmp_path):
             "N8N_DB_PASSWORD": "test-db",
             "N8N_ENCRYPTION_KEY": "test-key",
             "RABBITMQ_DEFAULT_PASS": "test-broker",
+            "SEARXNG_SECRET": "test-search",
         }
         settings.update(values or {})
         fixture = tmp_path / "fixture.env"
@@ -77,9 +80,64 @@ def render(tmp_path):
     return invoke
 
 
+@pytest.fixture
+def render_docling(tmp_path):
+    """Разрешает отдельный Docling Compose с тестовым secret и без daemon."""
+
+    def invoke(values=None, process=None):
+        """Возвращает JSON Docling Compose с изолированным project name."""
+        if not shutil.which("docker"):
+            pytest.skip("Для интерполяции нужен Docker Compose CLI")
+        settings = {"DOCLING_API_KEY": "test-docling-key"}
+        settings.update(values or {})
+        fixture = tmp_path / "docling.env"
+        fixture.write_text(
+            "\n".join(f"{key}={value}" for key, value in settings.items()),
+            encoding="utf-8",
+        )
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("DOCLING_") and not key.startswith("COMPOSE_")
+        }
+        env.update(process or {})
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-name",
+                "docling-eval",
+                "--project-directory",
+                str(ROOT / "docling-eval"),
+                "--env-file",
+                str(fixture),
+                "-f",
+                str(ROOT / "docling-eval/compose.yaml"),
+                "config",
+                "--format",
+                "json",
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert result.returncode == 0, "Compose отверг Docling-конфигурацию"
+        return json.loads(result.stdout)
+
+    return invoke
+
+
 @pytest.mark.parametrize(
     "profiles",
-    [(), ("ai-vlm",), ("ai-embedding",), ("ai-vlm", "ai-embedding", "ai-ui")],
+    [
+        (),
+        ("ai-vlm",),
+        ("ai-embedding",),
+        ("ai-search",),
+        ("ai-vlm", "ai-embedding", "ai-ui", "ai-search"),
+    ],
 )
 def test_profiles_and_command_precedence(render, profiles):
     """Команда выше env-файла; defaults и опциональные сервисы разрешает Compose."""
@@ -111,6 +169,205 @@ def test_profiles_and_command_precedence(render, profiles):
             ]
             == "8000"
         )
+    if "ai-search" in profiles:
+        assert "searxng" in resolved["services"]
+
+
+def test_docling_isolated_security_and_precedence(render_docling):
+    """Docling остаётся отдельным, loopback-only и получает process override."""
+    resolved = render_docling(
+        {"DOCLING_HOST_PORT": "5111"}, {"DOCLING_HOST_PORT": "5222"}
+    )
+    config.validate_docling(resolved)
+    service = resolved["services"]["docling"]
+    assert resolved["name"] == "docling-eval"
+    assert config.url(service, 5001, "/health") == "http://127.0.0.1:5222/health"
+    assert service["environment"]["DOCLING_SERVE_ENABLE_REMOTE_SERVICES"] == "false"
+    assert service["cap_drop"] == ["ALL"]
+    assert "no-new-privileges:true" in service["security_opt"]
+
+
+def test_docling_rejects_placeholder_secret(render_docling):
+    """Каталожный placeholder API key не считается deployment-secret."""
+    resolved = render_docling({"DOCLING_API_KEY": "CHANGE_ME"})
+    with pytest.raises(config.ConfigError):
+        config.validate_docling(resolved)
+
+
+def test_docling_settings_do_not_print_secret(render_docling, capsys):
+    """Сводка показывает адрес и наличие ключа, но не сам ключ."""
+    resolved = render_docling({"DOCLING_API_KEY": "private-test-key"})
+    config.print_settings(resolved)
+    output = capsys.readouterr().out
+    assert "private-test-key" not in output
+    assert "<redacted: set>" in output
+    assert "127.0.0.1" in output
+
+
+def test_docling_rejects_additional_public_binding(render_docling):
+    """Loopback endpoint не разрешает второй опубликованный порт."""
+    resolved = render_docling()
+    resolved["services"]["docling"]["ports"].append(
+        {"target": 5001, "published": "5999", "host_ip": "0.0.0.0"}
+    )
+    with pytest.raises(config.ConfigError):
+        config.validate_docling(resolved)
+
+
+def test_docling_tessdata_download_and_idempotency(tmp_path, monkeypatch):
+    """Tessdata скачивается атомарно, проверяется и повторно не загружается."""
+    payload = b"pinned-russian-tessdata"
+    model = tmp_path / "tessdata/rus.traineddata"
+    monkeypatch.setattr(config, "DOCLING_TESSDATA_PATH", model)
+    monkeypatch.setattr(
+        config, "DOCLING_TESSDATA_SHA256", hashlib.sha256(payload).hexdigest()
+    )
+    calls = 0
+
+    def download(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            raise OSError("temporary download failure")
+        return io.BytesIO(payload)
+
+    monkeypatch.setattr(config.urllib.request, "urlopen", download)
+    config.prepare_docling_tessdata(check_only=False)
+    assert model.read_bytes() == payload
+    config.prepare_docling_tessdata(check_only=True)
+    assert calls == 3
+    model.write_bytes(b"corrupt")
+    with pytest.raises(config.ConfigError):
+        config.prepare_docling_tessdata(check_only=True)
+    missing = tmp_path / "missing/tessdata/rus.traineddata"
+    monkeypatch.setattr(config, "DOCLING_TESSDATA_PATH", missing)
+    with pytest.raises(config.ConfigError):
+        config.prepare_docling_tessdata(check_only=True)
+    assert not missing.parent.exists()
+
+
+def test_docling_bad_download_preserves_existing_file(tmp_path, monkeypatch):
+    """Ошибка hash не заменяет существующий файл и не оставляет partial download."""
+    model = tmp_path / "rus.traineddata"
+    model.write_bytes(b"existing")
+    monkeypatch.setattr(config, "DOCLING_TESSDATA_PATH", model)
+    monkeypatch.setattr(config, "DOCLING_TESSDATA_SHA256", "0" * 64)
+    monkeypatch.setattr(
+        config.urllib.request, "urlopen", lambda *_a, **_kw: io.BytesIO(b"bad")
+    )
+    with pytest.raises(config.ConfigError):
+        config.prepare_docling_tessdata(check_only=False)
+    assert model.read_bytes() == b"existing"
+    assert list(tmp_path.iterdir()) == [model]
+
+
+@pytest.fixture
+def docling_runtime():
+    """Даёт согласованную пару Compose/inspect для проверки доступа Docling."""
+    service = {
+        "image": "docling:test",
+        "environment": {"DOCLING_SERVE_API_KEY": "test-runtime-key"},
+        "ports": [{"target": 5001, "published": 5001, "host_ip": "127.0.0.1"}],
+    }
+    item = {
+        "Id": "docling-container",
+        "Config": {
+            "Image": "docling:test",
+            "Env": ["DOCLING_SERVE_API_KEY=test-runtime-key"],
+        },
+        "HostConfig": {
+            "PortBindings": {"5001/tcp": [{"HostIp": "127.0.0.1", "HostPort": "5001"}]},
+            "CapDrop": ["ALL"],
+            "SecurityOpt": ["no-new-privileges:true"],
+        },
+        "Mounts": [
+            {
+                "Destination": "/usr/share/tesseract/tessdata/rus.traineddata",
+                "Type": "bind",
+                "RW": False,
+            }
+        ],
+    }
+    return service, item
+
+
+def test_docling_runtime_requires_all_tesseract_languages(monkeypatch, docling_runtime):
+    """Runtime-check принимает только контейнер с rus, eng и osd."""
+    service, item = docling_runtime
+    monkeypatch.setattr(config, "http_get", lambda _address: b"ok")
+    monkeypatch.setattr(
+        config,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            _args, 0, stdout="List of available languages:\neng\nosd\nrus\n"
+        ),
+    )
+    config.check_docling(service, item)
+    monkeypatch.setattr(
+        config,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            _args, 0, stdout="eng\nosd\n"
+        ),
+    )
+    with pytest.raises(config.ConfigError):
+        config.check_docling(service, item)
+
+
+@pytest.mark.parametrize("drift", ["secret", "binding", "mount"])
+def test_docling_runtime_rejects_security_drift(monkeypatch, docling_runtime, drift):
+    """Старый контейнер с другим ключом/публичным портом/RW mount не проходит check."""
+    service, item = docling_runtime
+    if drift == "secret":
+        item["Config"]["Env"] = ["DOCLING_SERVE_API_KEY=old-key"]
+    elif drift == "binding":
+        item["HostConfig"]["PortBindings"]["5001/tcp"][0]["HostIp"] = "0.0.0.0"
+    else:
+        item["Mounts"][0]["RW"] = True
+    monkeypatch.setattr(
+        config, "http_get", lambda _a: pytest.fail("API вызван до проверки доступа")
+    )
+    with pytest.raises(config.ConfigError):
+        config.check_docling(service, item)
+
+
+@pytest.mark.parametrize("check_only", [False, True])
+def test_docling_start_uses_only_isolated_compose(
+    render_docling, monkeypatch, check_only
+):
+    """Запуск изолирован; --check-only запрещает up и сохраняет read-only подготовку."""
+    resolved = render_docling()
+    monkeypatch.setattr(config, "load_docling_config", lambda _file: resolved)
+    preparations = []
+    monkeypatch.setattr(
+        config,
+        "prepare_docling_tessdata",
+        lambda **kwargs: preparations.append(kwargs),
+    )
+    monkeypatch.setattr(config, "containers", lambda _project: {})
+    monkeypatch.setattr(config, "check_services", lambda *_args: True)
+    commands = []
+
+    def record(*args, **_kwargs):
+        """Записывает команды без обращения к Docker daemon."""
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 0, stdout="")
+
+    monkeypatch.setattr(config, "run", record)
+    argv = ["docling-start", "--env-file", "deployment.env"]
+    if check_only:
+        argv.append("--check-only")
+    assert config.main(argv) == 0
+    assert preparations == [{"check_only": check_only}]
+    if check_only:
+        assert all("up" not in command for command in commands)
+        return
+    startup = next(command for command in commands if "up" in command)
+    assert startup[startup.index("--project-name") + 1] == "docling-eval"
+    assert startup[startup.index("--env-file") + 1] == "deployment.env"
+    assert startup[startup.index("-f") + 1] == str(config.DOCLING_COMPOSE_FILE)
+    assert "--no-recreate" in startup
+    assert "--remove-orphans" not in startup
 
 
 def test_missing_required_setting_stops_before_changes(render, monkeypatch):

@@ -60,3 +60,15 @@ check только проверяет. Скриптов, меняющих .env �
 - Проверка RabbitMQ аутентифицируется существующей учётной записью, проверяет
   перечисленные deployment-параметром vhost и ничего не создаёт.
 - Reboot-проверка сравнивает container ID и named volumes до/после restart Docker.
+
+## Docling evaluation 2026-10-30
+
+- Docling Serve разворачивается отдельным Compose project `docling-eval`, чтобы
+  его lifecycle не затрагивал основной shared stack.
+- Host port доступен только через `127.0.0.1`; container access использует alias
+  `docling-eval` в существующей external network `ai-shared`.
+- Обязательны API key, отключённые remote services, dropped capabilities и
+  `no-new-privileges`.
+- Bootstrap скачивает только закреплённый `rus.traineddata`, проверяет SHA-256 и
+  монтирует файл read-only. VLM/embedding weights скрипты по-прежнему не выбирают
+  и не скачивают.
