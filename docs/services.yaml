@@ -64,6 +64,7 @@ host_access_policy:
     - Application containers on the same host should use Docker DNS over ai-shared.
     - Infrastructure-private dependencies should not publish host ports.
     - Published inference endpoints rely on trusted LAN/VPN reachability and host firewall rules.
+    - Docling is a loopback-only exception and also requires its own API key.
 
 services:
   shared-vlm:
@@ -222,6 +223,92 @@ services:
       - Open WebUI does not own vLLM model lifecycle.
       - Infrastructure connection settings are managed through Compose and env.
 
+  searxng:
+    managed_here: true
+    lifecycle: shared-optional
+
+    compose_service: searxng
+    compose_profile: ai-search
+
+    docker_dns_name: searxng
+    network: ai-shared
+    protocol: http
+
+    internal_access:
+      url: http://searxng:8080
+      use_from: approved containers attached to ai-shared
+
+    host_access:
+      published: false
+
+    authentication:
+      internal_secret_environment_variable: SEARXNG_SECRET
+
+    endpoints:
+      health: /
+      search: /search
+
+    notes:
+      - SearXNG is not published on the host and remains internal to ai-shared.
+      - The ai-search profile controls whether this optional service runs.
+
+  docling:
+    managed_here: true
+    lifecycle: isolated-evaluation
+    runtime: docling-serve-cpu
+
+    compose_service: docling
+    compose_file: docling-eval/compose.yaml
+    compose_project_name: docling-eval
+    docker_dns_name: docling-eval
+    network: ai-shared
+    protocol: http
+
+    internal_access:
+      url: http://docling-eval:5001
+      use_from: approved containers attached to ai-shared
+
+    host_access:
+      published: true
+      bind_ip: 127.0.0.1
+      host_port_environment_variable: DOCLING_HOST_PORT
+      default_host_port: 5001
+      url_template: http://127.0.0.1:5001
+      intended_scope: Docker host only
+
+    authentication:
+      type: api_key
+      secret_environment_variable: DOCLING_API_KEY
+
+    endpoints:
+      health: /health
+      ui: /
+
+    resources:
+      device: cpu
+      memory_limit: 8g
+      cpu_limit: 4.0
+      pids_limit: 512
+
+    storage:
+      russian_tesseract_model: docling-eval/tessdata/rus.traineddata
+      model_source: tesseract-ocr/tessdata_fast
+      model_revision: 87416418657359cb625c412a48b6e1d6d41c29bd
+      model_sha256: e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225
+      bind_mount_read_only: true
+      backup_required: false
+
+    security:
+      remote_services_enabled: false
+      no_new_privileges: true
+      capabilities_dropped:
+        - ALL
+
+    notes:
+      - This evaluation project does not own other shared-service lifecycles.
+      - Bootstrap downloads only the pinned Russian tessdata artifact after SHA-256 verification.
+      - English and orientation data are supplied by the image and checked at runtime.
+
   n8n:
     managed_here: true
     lifecycle: shared
@@ -343,6 +430,8 @@ llm_rules:
   - Never reuse infrastructure-private services such as n8n-db from business applications.
   - Use shared-vlm for shared generation and VLM workloads.
   - Use shared-embedding for compatible shared embedding workloads.
+  - Use SearXNG only through ai-shared when the ai-search profile is enabled.
+  - Treat Docling as an isolated authenticated evaluation contract, not as part of the main Compose lifecycle.
   - Do not create project-local vLLM when a suitable shared service exists.
   - Physical model IDs/revisions, GPU placement, TP and DP settings belong to shared deployment configuration.
   - Use Docker DNS/internal ports on the same host and SHARED_PUBLIC_HOST for approved LAN/VPN clients on other hosts.

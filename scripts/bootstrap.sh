@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/bootstrap.sh
-# Первоначальный безопасный запуск или точечная миграция старых AI helper-файлов.
+# Безопасный запуск основного stack и Docling или миграция старых AI helpers.
 # Учётные записи создают только штатные образы при первом запуске пустых volumes.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -16,7 +16,10 @@ for argument in "$@"; do
   esac
 done
 
-python3 scripts/config-check.py validate "${compose_args[@]}"
+python3 scripts/config-check.py validate --show-settings "${compose_args[@]}"
+if ! "$update_ai_helpers" || "$check_only"; then
+  python3 scripts/config-check.py docling-validate --show-settings "${compose_args[@]}"
+fi
 
 # Bootstrap не меняет настройки ОС. Исправление выполняет администратор отдельно.
 if ! command -v systemctl >/dev/null 2>&1; then
@@ -33,7 +36,8 @@ if ! systemctl is-active --quiet docker.service; then
 fi
 
 if "$check_only"; then
-  exec python3 scripts/config-check.py prepare --check-only "${compose_args[@]}"
+  python3 scripts/config-check.py prepare --check-only "${compose_args[@]}"
+  exec python3 scripts/config-check.py docling-prepare --check-only "${compose_args[@]}"
 fi
 
 if "$update_ai_helpers"; then
@@ -52,6 +56,8 @@ if "$update_ai_helpers"; then
 fi
 
 python3 scripts/config-check.py prepare "${compose_args[@]}"
+python3 scripts/config-check.py docling-prepare "${compose_args[@]}"
 # Обычный bootstrap создаёт отсутствующие сервисы, но не пересоздаёт существующие.
 docker compose "${compose_args[@]}" up -d --no-recreate --wait --wait-timeout 1800
+python3 scripts/config-check.py docling-start "${compose_args[@]}"
 python3 scripts/config-check.py check "${compose_args[@]}"

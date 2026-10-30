@@ -1,0 +1,76 @@
+# docling-eval/compose.yaml
+# Изолированный стенд оценки Docling Serve и Tesseract.
+# Не управляет lifecycle существующих shared-сервисов.
+
+name: docling-eval
+
+services:
+  docling:
+    image: ghcr.io/docling-project/docling-serve-cpu:v1.38.2
+    restart: unless-stopped
+    init: true
+
+    mem_limit: 8g
+    cpus: 4.0
+    pids_limit: 512
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    ports:
+      - "127.0.0.1:${DOCLING_HOST_PORT:-5001}:5001"
+
+    environment:
+      DOCLING_DEVICE: cpu
+      DOCLING_SERVE_ENABLE_UI: "true"
+      DOCLING_SERVE_API_KEY: ${DOCLING_API_KEY:?Set DOCLING_API_KEY in the root .env or process environment}
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      DOCLING_SERVE_MAX_SYNC_WAIT: "600"
+      DOCLING_SERVE_MAX_NUM_PAGES: "50"
+      DOCLING_SERVE_MAX_FILE_SIZE: "52428800"
+
+      UVICORN_WORKERS: "1"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+
+      TESSDATA_PREFIX: /usr/share/tesseract/tessdata/
+
+    volumes:
+      - type: bind
+        source: ./tessdata/rus.traineddata
+        target: /usr/share/tesseract/tessdata/rus.traineddata
+        read_only: true
+        bind:
+          create_host_path: false
+
+    networks:
+      ai-shared:
+        aliases:
+          - docling-eval
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          tesseract --list-langs 2>/dev/null | grep -Fxq rus
+          && tesseract --list-langs 2>/dev/null | grep -Fxq eng
+          && tesseract --list-langs 2>/dev/null | grep -Fxq osd
+          && python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health', timeout=5)"
+      interval: 30s
+      timeout: 12s
+      retries: 5
+      start_period: 180s
+
+    logging:
+      driver: local
+      options:
+        max-size: "${SHARED_LOG_MAX_SIZE:-10m}"
+        max-file: "${SHARED_LOG_MAX_FILE:-5}"
+
+networks:
+  ai-shared:
+    external: true
+    name: ${SHARED_NETWORK_NAME:-ai-shared}

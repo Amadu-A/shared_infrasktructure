@@ -65,8 +65,10 @@ Shared и project-specific state/lifecycle нельзя смешивать.
 shared-vlm
 shared-embedding
 Open WebUI
+SearXNG (optional, internal)
 RabbitMQ
 n8n
+Docling Serve (isolated evaluation project)
 ```
 
 `n8n-db` — private dependency n8n и MUST NOT использоваться как application database.
@@ -93,9 +95,11 @@ n8n
 shared-infrastructure
 ├── shared-vlm
 ├── shared-embedding
+├── SearXNG
 ├── RabbitMQ
 ├── n8n
-└── Open WebUI
+├── Open WebUI
+└── Docling Serve (separate Compose project)
 
 Project A ─┐
 Project B ─┼──> shared services
@@ -206,6 +210,8 @@ Project database/state SHOULD оставаться в private project network.
 shared-vlm:       http://shared-vlm:8000/v1
 shared-embedding: http://shared-embedding:8000/v1
 Open WebUI:       http://open-webui:8080
+SearXNG:          http://searxng:8080
+Docling:          http://docling-eval:5001
 n8n:              http://n8n:5678
 RabbitMQ:         rabbitmq:5672
 ```
@@ -607,6 +613,24 @@ Open WebUI — shared human UI для manual chat, prompt/vision testing и пр
 
 Он MUST NOT быть dependency business application и не управляет model lifecycle.
 
+### 12.1. SearXNG
+
+SearXNG — optional internal search service профиля `ai-search`. Он доступен только
+в `ai-shared` по `http://searxng:8080`, не публикует host port и требует отдельный
+`SEARXNG_SECRET`. Его lifecycle не меняет VLM/embedding или application state.
+
+### 12.2. Docling Serve evaluation
+
+Docling Serve — изолированный CPU-only стенд оценки document conversion и OCR.
+Его отдельный Compose project `docling-eval` подключается к существующей
+`ai-shared`, но не управляет lifecycle основного stack. Stable internal endpoint:
+`http://docling-eval:5001`; host endpoint привязан только к `127.0.0.1`.
+
+Доступ требует `DOCLING_API_KEY`, remote services отключены. Русская модель
+Tesseract скачивается только bootstrap из закреплённого commit `tessdata_fast`,
+принимается после проверки SHA-256 и монтируется read-only. `eng` и `osd`
+поставляются image и проверяются health/runtime-check.
+
 ---
 
 ## 13. Project-specific databases
@@ -705,6 +729,10 @@ trusted LAN/VPN и host firewall.
 
 `HF_TOKEN`, если он нужен для gated/private Hugging Face repository, является
 deployment secret shared infrastructure и MUST NOT передаваться business projects.
+
+`DOCLING_API_KEY` обязателен для отдельного Docling evaluation project;
+`SEARXNG_SECRET` обязателен при включённом `ai-search`. Их значения не выводятся
+в diagnostics и не коммитятся.
 
 Приоритет един для Compose, bootstrap и check:
 
@@ -870,10 +898,11 @@ gateway "на будущее".
 ## 22. Runtime operations
 
 Первоначальная настройка и запуск — `bash scripts/bootstrap.sh`; проверка без
-изменений — `bash scripts/check.sh`. Оба используют `scripts/config-check.py`
-и одинаковые итоговые настройки Compose. Bootstrap не устанавливает Docker,
+изменений — `bash scripts/check.sh`. Оба используют `scripts/config-check.py`,
+проверяют основной Compose и отдельный `docling-eval/compose.yaml` с одинаковым
+env precedence. Bootstrap не устанавливает Docker,
 драйверы и не меняет systemd: неактивный или выключенный из автозапуска Docker
-является ошибкой с инструкцией оператору. Обычный запуск использует
+является ошибкой с инструкцией оператору. Обычный запуск обоих projects использует
 `--no-recreate`; отдельная миграция старых AI helper-mounts описана в README.
 Штатное создание начальных пользователей образами сохраняется.
 После reboot контейнеры восстанавливает Docker через существующую restart policy;
@@ -971,27 +1000,18 @@ Verify runtime before changing infrastructure.
 ## 26. Итоговая модель
 
 ```text
-                         SHARED INFRASTRUCTURE
-                    owner: shared-infrastructure
-                               │
-          ┌────────────────────┼─────────────────────┐
-          │                    │                     │
-     shared-vlm         shared-embedding         RabbitMQ
-          │                    │                     │
-          ├──────────────┐     │                     │
-          │              │     │                     │
-      Open WebUI        n8n    │                     │
-                         │     │                     │
-                      n8n-db   │                     │
-                    (private)  │                     │
-                               │
-                          ai-shared
-                               │
-              ┌────────────────┼────────────────┐
-              │                │                │
-          Project A        Project B        Project C
-              │                │                │
-         private net       private net       private net
-              │                │                │
-      PostgreSQL/Qdrant  PostgreSQL/...   PostgreSQL/...
+SHARED INFRASTRUCTURE (owner: shared-infrastructure)
+├── main Compose
+│   ├── shared-vlm
+│   ├── shared-embedding
+│   ├── Open WebUI
+│   ├── SearXNG
+│   ├── RabbitMQ
+│   └── n8n
+│       └── n8n-db (private)
+├── docling-eval (separate Compose project)
+└── ai-shared (external)
+    ├── Project A ── private net ── PostgreSQL/Qdrant
+    ├── Project B ── private net ── PostgreSQL/...
+    └── Project C ── private net ── PostgreSQL/...
 ```

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # scripts/check.sh
-# Проверяет Compose, контейнеры и API; --with-tests добавляет Ruff и pytest.
+# Проверяет оба Compose projects, контейнеры и API; --with-tests добавляет tests.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -15,6 +15,7 @@ for argument in "$@"; do
 done
 
 python3 scripts/config-check.py check "${compose_args[@]}"
+python3 scripts/config-check.py docling-check "${compose_args[@]}"
 if "$with_tests"; then
   python3 -m ruff check scripts tests
   python3 -m ruff format --check scripts tests

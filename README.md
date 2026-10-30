@@ -1,7 +1,8 @@
 <!-- README.md -->
 # shared-infrastructure
 
-Общие VLM, embedding, Open WebUI, n8n и RabbitMQ для нескольких проектов.
+Общие VLM, embedding, Open WebUI, SearXNG, n8n и RabbitMQ для нескольких проектов,
+а также изолированный CPU-only стенд оценки Docling Serve и Tesseract.
 Данные и жизненный цикл приложений остаются независимыми. Docker уже должен
 быть установлен; проект не переустанавливает Docker, драйверы или NVIDIA Toolkit.
 
@@ -13,6 +14,10 @@
     ├── .gitignore
     ├── .gitattributes
     ├── README.md
+    ├── docling-eval/
+    │   └── compose.yaml
+    ├── searxng/
+    │   └── settings.yml
     ├── docs/
     │   ├── LLM_CONTEXT.md
     │   ├── ENGINEERING_GUIDELINES.md
@@ -46,27 +51,29 @@
 
 Для полного набора сервисов указать в .env:
 
-    COMPOSE_PROFILES=ai-vlm,ai-embedding,ai-ui
+    COMPOSE_PROFILES=ai-vlm,ai-embedding,ai-ui,ai-search
 
 Можно отключить необязательный UI, убрав ai-ui. Для ai-ui нужен также ai-vlm.
+SearXNG включается профилем ai-search и остаётся доступным только в ai-shared.
 При отключённых inference-профилях проверка не требует NVIDIA.
 
 Основные параметры:
 
 | Переменная | Назначение |
 |---|---|
-| `COMPOSE_PROFILES` | Включённые AI-профили: `ai-vlm,ai-embedding,ai-ui` |
+| `COMPOSE_PROFILES` | Включённые AI-профили: `ai-vlm,ai-embedding,ai-ui,ai-search` |
 | `SHARED_NETWORK_NAME` | Существующая external-сеть, обычно `ai-shared` |
 | `SHARED_*_GPU_DEVICES` | GPU из серверного `.env`; Python их не выбирает |
 | `SHARED_*_TP_SIZE`, `SHARED_*_DP_SIZE` | Должны соответствовать числу GPU: `TP × DP` |
 | `SHARED_*_MAX_MODEL_LEN` | Явный контекст каждой модели |
 | `RABBITMQ_REQUIRED_VHOSTS` | Существующие обязательные vhost через запятую; ничего не создаёт |
+| `DOCLING_HOST_PORT` | Loopback-only host port отдельного Docling Compose project |
 | `*_BIND_IP`, `*_HOST_PORT` | Публикация сервисов на host |
 
 Обязательные секреты: `N8N_DB_PASSWORD`, `N8N_ENCRYPTION_KEY`,
-`RABBITMQ_DEFAULT_PASS`. `OPEN_WEBUI_SECRET_KEY` нужен только для UI. На новой
-установке генерировать каждый секрет отдельно; вывод не сохранять в shell history
-или Git:
+`RABBITMQ_DEFAULT_PASS`, `DOCLING_API_KEY`. `OPEN_WEBUI_SECRET_KEY` нужен только
+для UI, `SEARXNG_SECRET` — только для профиля ai-search. На новой установке
+генерировать каждый секрет отдельно; вывод не сохранять в shell history или Git:
 
     openssl rand -hex 32
     umask 077
@@ -83,8 +90,10 @@ SHARED_VLM_TP_SIZE, SHARED_VLM_DP_SIZE и SHARED_VLM_MAX_MODEL_LEN задают�
 существующими. Все переменные перечислены в .env.example.
 
 main у Hugging Face изменяем; точный SHA закрепляется владельцем отдельно.
-Ни один скрипт здесь не выбирает модель, не скачивает другие веса, не редактирует
-.env и не создаёт compose.override.yaml. Доступны модели, обслуживаемые
+Ни один скрипт здесь не выбирает и не скачивает VLM/embedding weights, не редактирует
+.env и не создаёт compose.override.yaml. Единственный небольшой загружаемый
+bootstrap-артефакт — закреплённый `docling-eval/tessdata/rus.traineddata`.
+Доступны модели, обслуживаемые
 настроенными VLM/embedding контейнерами; само наличие других весов в cache
 не делает их отдельными API-моделями.
 
@@ -96,9 +105,10 @@ main у Hugging Face изменяем; точный SHA закрепляется
     bash scripts/bootstrap.sh
 
 Bootstrap проверяет, что Docker уже запущен и включён в автозапуск, создаёт
-отсутствующую согласованную shared-сеть и запускает выбранные сервисы. Системные
-настройки он не меняет. При ошибке администратор отдельно выполняет указанную
-команду `systemctl`, после чего повторяет bootstrap.
+отсутствующую согласованную shared-сеть, проверяет/скачивает закреплённую русскую
+модель Tesseract и запускает основной stack и отдельный project `docling-eval`.
+Системные настройки он не меняет. При ошибке администратор отдельно выполняет
+указанную команду `systemctl`, после чего повторяет bootstrap.
 
 Пользователь базы n8n и начальный администратор RabbitMQ создаются штатными
 образами при первом запуске пустых volumes. Имена, секреты и порядок этой
@@ -106,15 +116,41 @@ Bootstrap проверяет, что Docker уже запущен и включ�
 пароли, базы и очереди не пересоздаются. Проектные пользователи/vhost брокера
 по-прежнему добавляются отдельной согласованной административной операцией.
 
-Обычный bootstrap использует `docker compose up --no-recreate`: он создаёт
-отсутствующие сервисы, но не применяет новую конфигурацию к работающим контейнерам.
-Обновления выполняются отдельной явной процедурой ниже.
+Обычный bootstrap использует `docker compose up --no-recreate` для обоих Compose
+projects: он создаёт отсутствующие сервисы, но не применяет новую конфигурацию к
+работающим контейнерам. Обновления выполняются отдельной явной процедурой ниже.
 
 Проверка подготовки без изменения системы и запуска контейнеров:
 
     bash scripts/bootstrap.sh --check-only
 
-При таком запуске отсутствующая сеть считается ошибкой, а не создаётся.
+При таком запуске отсутствующая сеть или отсутствующий/повреждённый
+`rus.traineddata` считаются ошибкой: каталоги и файлы не создаются.
+
+Bootstrap выводит только разрешённую сводку итоговых Compose-настроек: project,
+включённые сервисы, сеть, порты и наличие secrets с маскированием значений.
+Содержимое `.env` и полный config/inspect в diagnostics не попадают.
+
+Русская tessdata закреплена на commit `87416418657359cb625c412a48b6e1d6d41c29bd`
+репозитория `tesseract-ocr/tessdata_fast` и SHA-256
+`e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225`.
+Корректный файл повторно не скачивается; новый файл принимается атомарно после
+проверки hash, получает права `644` и остаётся вне Git.
+
+Docling использует корневой `.env` или тот же `--env-file`, который передан
+bootstrap/check. Для отдельной валидации и эксплуатации из корня репозитория:
+
+    python3 scripts/config-check.py docling-validate
+    python3 scripts/config-check.py docling-prepare --check-only
+    python3 scripts/config-check.py docling-check
+
+После согласованного изменения только Docling выполнить целевое обновление:
+
+    docker compose --env-file .env --project-name docling-eval -f docling-eval/compose.yaml up -d --no-deps docling
+    python3 scripts/config-check.py docling-check
+
+Rollback: вернуть прежний Docling Compose/image и закрытые deployment-параметры,
+повторить эту целевую команду и check. Основной stack при этом не пересоздаётся.
 
 ## Перезагрузка сервера
 
@@ -137,7 +173,7 @@ Bootstrap только проверяет автозапуск Docker. Для в
     python3 scripts/config-check.py reboot-verify --state-file /tmp/shared-reboot.json
 
 Последняя команда ждёт health до 30 минут, требует те же container ID и named
-volumes, повторно проверяет API и RabbitMQ. Это эксплуатационная проверка:
+volumes обоих projects, повторно проверяет API, RabbitMQ и Docling. Это эксплуатационная проверка:
 выполнять её только в согласованное окно. Файл snapshot не содержит env или секреты.
 
 Основание: [Docker restart policies](https://docs.docker.com/engine/containers/start-containers-automatically/)
@@ -149,8 +185,9 @@ volumes, повторно проверяет API и RabbitMQ. Это экспл�
 
     bash scripts/check.sh
 
-Скрипт проверяет итоговый Compose, контейнеры, health и логические имена из
-`/v1/models`. Для RabbitMQ проверяются работающий broker, AMQP-порт, реальная
+Скрипт проверяет оба итоговых Compose, контейнеры, health, языки Tesseract
+`rus/eng/osd` и логические имена из `/v1/models`. Для RabbitMQ проверяются
+работающий broker, AMQP-порт, реальная
 авторизация существующего администратора через Management API, наличие
 `RABBITMQ_REQUIRED_VHOSTS` и права пользователя на них. Пользователи, пароли и
 vhost не создаются и не изменяются. Секреты и полный config/inspect не печатаются.
@@ -186,10 +223,14 @@ vhost не создаются и не изменяются. Секреты и п
 | shared-vlm | http://shared-vlm:8000/v1 | 8000 |
 | shared-embedding | http://shared-embedding:8000/v1; /pooling на корне | 8001 |
 | Open WebUI | http://open-webui:8080 | 3000 |
+| SearXNG | http://searxng:8080 | не публикуется |
+| Docling | http://docling-eval:5001 | 127.0.0.1:5001 |
 | n8n | http://n8n:5678 | 5678 |
 | RabbitMQ | rabbitmq:5672 | 5672, панель 15672 |
 
 Приложения используют logical model aliases shared-vlm и shared-embedding.
+Docling требует API key, отключает remote services и доступен с host только через
+loopback. Его Compose project не управляет lifecycle остальных shared-сервисов.
 На том же сервере нужный application-контейнер подключается к external ai-shared,
 а собственная БД остаётся в private project network. На другом approved host
 используются SHARED_PUBLIC_HOST и published ports. Published 0.0.0.0 ограничивается
