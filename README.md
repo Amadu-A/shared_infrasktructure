@@ -89,6 +89,11 @@ SHARED_VLM_TP_SIZE, SHARED_VLM_DP_SIZE и SHARED_VLM_MAX_MODEL_LEN задают�
 Размеры очередей, MODEL_ARGS, revision, image, bind IP и порты сохранять
 существующими. Все переменные перечислены в .env.example.
 
+Open WebUI закреплён на `ghcr.io/open-webui/open-webui:v0.12.4` в Compose и каталоге.
+Если в серверном `.env` задан `OPEN_WEBUI_IMAGE`, версия должна быть согласована
+там отдельно: `.env.example` не переопределяет этот файл. При возврате к `v0.12.4`
+применять изменение только к `open-webui` с `--no-deps`, сохраняя его data volume.
+
 main у Hugging Face изменяем; точный SHA закрепляется владельцем отдельно.
 Ни один скрипт здесь не выбирает и не скачивает VLM/embedding weights, не редактирует
 .env и не создаёт compose.override.yaml. Единственный небольшой загружаемый

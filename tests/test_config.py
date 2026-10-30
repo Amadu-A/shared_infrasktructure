@@ -172,6 +172,13 @@ def test_profiles_and_command_precedence(render, profiles):
         )
     if "ai-search" in profiles:
         assert "searxng" in resolved["services"]
+    if "ai-ui" in profiles:
+        catalog_image = re.search(
+            r"^OPEN_WEBUI_IMAGE=(.+)$",
+            (ROOT / ".env.example").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )[1].strip()
+        assert resolved["services"]["open-webui"]["image"] == catalog_image
 
 
 def test_docling_isolated_security_and_precedence(render_docling):
