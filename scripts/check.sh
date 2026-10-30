@@ -14,10 +14,12 @@ for argument in "$@"; do
   fi
 done
 
-python3 scripts/config-check.py check "${compose_args[@]}"
-python3 scripts/config-check.py docling-check "${compose_args[@]}"
+result=0
+python3 scripts/config-check.py check "${compose_args[@]}" || result=1
+python3 scripts/config-check.py docling-check "${compose_args[@]}" || result=1
 if "$with_tests"; then
-  python3 -m ruff check scripts tests
-  python3 -m ruff format --check scripts tests
-  python3 -B -m pytest -p no:cacheprovider -q
+  python3 -m ruff check scripts tests || result=1
+  python3 -m ruff format --check scripts tests || result=1
+  python3 -B -m pytest -p no:cacheprovider -q || result=1
 fi
+exit "$result"

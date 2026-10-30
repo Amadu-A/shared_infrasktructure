@@ -18,6 +18,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -406,9 +407,17 @@ def url(service: dict, port: int, path: str) -> str:
 
 
 def http_get(address: str) -> bytes:
-    """Проверяет HTTP с конечным timeout и не выводит тело ответа."""
-    with urllib.request.urlopen(address, timeout=10) as response:
-        return response.read()
+    """Проверяет HTTP с timeout; сообщает endpoint/код ошибки без URL и response body."""
+    path = urllib.parse.urlsplit(address).path
+    try:
+        with urllib.request.urlopen(address, timeout=10) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raise ConfigError(f"HTTP {path}: сервер вернул код {exc.code}.") from exc
+    except OSError as exc:
+        raise ConfigError(
+            f"HTTP {path}: соединение не удалось или истёк timeout."
+        ) from exc
 
 
 def rabbitmq_get(service: dict, path: str, user: str, password: str) -> bytes:
@@ -510,8 +519,32 @@ def check_docling(service: dict, item: dict) -> None:
         raise ConfigError("Docling не видит обязательные языки Tesseract.")
 
 
+def check_startup_config(name: str, service: dict, item: dict) -> None:
+    """Сверяет явно заданные startup-поля; inherited defaults образа не заменяет None."""
+    current = item.get("Config") or {}
+    differences = []
+    if current.get("Image") != service.get("image"):
+        differences.append("Image")
+    for compose_key, inspect_key in (("command", "Cmd"), ("entrypoint", "Entrypoint")):
+        expected = service.get(compose_key)
+        # None означает наследование из image, [] — явное обнуление startup-поля.
+        if expected is not None and (current.get(inspect_key) or []) != (
+            expected or []
+        ):
+            differences.append(inspect_key)
+    if differences:
+        hint = (
+            " Обнаружены старые helper-mounts; проверьте migration-plan."
+            if legacy_services({name: item})
+            else " --no-recreate сохраняет прежний контейнер; требуется согласовать целевое обновление."
+        )
+        raise ConfigError(
+            f"Конфигурация запуска отличается от Compose: {', '.join(differences)}.{hint}"
+        )
+
+
 def check_services(config: dict, actual: dict) -> bool:
-    """Проверяет ожидаемые контейнеры, health и доступность логических моделей."""
+    """Проверяет контейнеры/API и выводит безопасную причину каждого отказа."""
     success = True
     for name, service in config["services"].items():
         try:
@@ -527,30 +560,26 @@ def check_services(config: dict, actual: dict) -> bool:
             ) != service.get("restart"):
                 raise ConfigError("Restart policy контейнера отличается от Compose.")
             if name in AI_PROFILES:
-                current = item["Config"]
-                if (
-                    current.get("Image") != service.get("image")
-                    or current.get("Cmd") != service.get("command")
-                    or current.get("Entrypoint") != service.get("entrypoint")
-                ):
-                    raise ConfigError(
-                        "Контейнер использует другую конфигурацию запуска."
-                    )
+                check_startup_config(name, service, item)
             if name in INFERENCE_SERVICES:
                 env = dict(
                     value.split("=", 1)
                     for value in item["Config"]["Env"]
                     if "=" in value
                 )
-                if any(
-                    env.get(key, "") != str(service["environment"].get(key, ""))
+                differences = [
+                    key
                     for key in (
                         "CUDA_VISIBLE_DEVICES",
                         "CUDA_DEVICE_ORDER",
                         "VLLM_BATCH_INVARIANT",
                     )
-                ):
-                    raise ConfigError("Параметры GPU/inference отличаются от Compose.")
+                    if env.get(key, "") != str(service["environment"].get(key, ""))
+                ]
+                if differences:
+                    raise ConfigError(
+                        f"Параметры GPU/inference отличаются от Compose: {', '.join(differences)}."
+                    )
                 http_get(url(service, 8000, "/health"))
                 reply = json.loads(http_get(url(service, 8000, "/v1/models")))
                 if name not in {model.get("id") for model in reply["data"]}:
@@ -567,9 +596,15 @@ def check_services(config: dict, actual: dict) -> bool:
             elif name == "docling":
                 check_docling(service, item)
             print(f"[OK] {name}")
-        except (ConfigError, OSError, ValueError, KeyError, TypeError, StopIteration):
+        except ConfigError as exc:
             success = False
-            print(f"[FAIL] {name}: проверьте health, конфигурацию запуска и API.")
+            print(f"[FAIL] {name}: {exc}")
+        except OSError:
+            success = False
+            print(f"[FAIL] {name}: ошибка соединения с Docker/API или timeout.")
+        except (ValueError, KeyError, TypeError, StopIteration):
+            success = False
+            print(f"[FAIL] {name}: неожиданный формат ответа Compose/inspect/API.")
     return success
 
 

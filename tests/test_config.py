@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.error
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -427,6 +428,170 @@ def test_gpu_layout_comes_from_compose_not_python(render):
 def test_missing_expected_container_is_failure():
     """Отсутствующий включённый VLM не считается успешным SKIP."""
     assert not config.check_services({"services": {"shared-vlm": {}}}, {})
+
+
+@pytest.mark.parametrize("inherited", [None, [], ["image-default"]])
+def test_startup_inherits_unspecified_command_and_entrypoint(inherited):
+    """Отсутствующие в Compose startup-поля наследуются из image без ложного drift."""
+    config.check_startup_config(
+        "open-webui",
+        {"image": "ui:test", "command": None, "entrypoint": None},
+        {"Config": {"Image": "ui:test", "Cmd": inherited, "Entrypoint": inherited}},
+    )
+
+
+@pytest.mark.parametrize("empty", [None, []])
+def test_startup_explicit_empty_accepts_docker_null_or_empty(empty):
+    """Docker представляет явно пустые command/entrypoint как null или []."""
+    config.check_startup_config(
+        "shared-vlm",
+        {"image": "vlm:test", "command": [], "entrypoint": []},
+        {"Config": {"Image": "vlm:test", "Cmd": empty, "Entrypoint": empty}},
+    )
+
+
+@pytest.fixture
+def healthy_vlm_runtime():
+    """Создаёт согласованные Compose/inspect данные для runtime-регрессии VLM."""
+    service = {
+        "image": "vlm:test",
+        "restart": "unless-stopped",
+        "command": ["--model", "expected-model"],
+        "entrypoint": ["python3", "guard"],
+        "environment": {"CUDA_VISIBLE_DEVICES": "0"},
+        "ports": [{"target": 8000, "published": "8000", "host_ip": "127.0.0.1"}],
+    }
+    item = {
+        "Config": {
+            "Image": "vlm:test",
+            "Cmd": ["--model", "expected-model"],
+            "Entrypoint": ["python3", "guard"],
+            "Env": ["CUDA_VISIBLE_DEVICES=0"],
+        },
+        "State": {"Running": True, "Health": {"Status": "healthy"}},
+        "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+    }
+    return service, item
+
+
+def test_healthy_vlm_still_checks_logical_model_api(monkeypatch, healthy_vlm_runtime):
+    """Совпадающий healthy контейнер проходит только после проверки alias в API."""
+    service, item = healthy_vlm_runtime
+    addresses = []
+
+    def response(address):
+        """Запоминает запросы, не обращаясь к реальному inference endpoint."""
+        addresses.append(address)
+        return b'{"data":[{"id":"shared-vlm"}]}'
+
+    monkeypatch.setattr(config, "http_get", response)
+    assert config.check_services(
+        {"services": {"shared-vlm": service}}, {"shared-vlm": item}
+    )
+    assert addresses == [
+        "http://127.0.0.1:8000/health",
+        "http://127.0.0.1:8000/v1/models",
+    ]
+
+
+@pytest.mark.parametrize(
+    "field", ["Image", "Cmd", "Entrypoint", "CUDA_VISIBLE_DEVICES"]
+)
+def test_runtime_drift_reports_field_without_values(
+    monkeypatch, capsys, healthy_vlm_runtime, field
+):
+    """Healthy не скрывает настоящий drift; диагностика не выводит command/env значения."""
+    service, item = healthy_vlm_runtime
+    sensitive = "sensitive-test-value"
+    if field == "CUDA_VISIBLE_DEVICES":
+        item["Config"]["Env"] = [f"CUDA_VISIBLE_DEVICES={sensitive}"]
+    else:
+        item["Config"][field] = sensitive if field == "Image" else [sensitive]
+    monkeypatch.setattr(
+        config, "http_get", lambda *_args: pytest.fail("Drift был проигнорирован")
+    )
+    assert not config.check_services(
+        {"services": {"shared-vlm": service}}, {"shared-vlm": item}
+    )
+    output = capsys.readouterr().out
+    assert field in output
+    assert sensitive not in output
+
+
+def test_healthy_webui_inherits_image_entrypoint(monkeypatch):
+    """WebUI с image entrypoint и заданным Compose command не даёт ложный FAIL."""
+    service = {
+        "image": "ui:test",
+        "command": ["python", "guard"],
+        "restart": "unless-stopped",
+        "ports": [{"target": 8080, "published": "3000", "host_ip": "127.0.0.1"}],
+    }
+    item = {
+        "Config": {
+            "Image": "ui:test",
+            "Cmd": ["python", "guard"],
+            "Entrypoint": ["image-entrypoint"],
+        },
+        "State": {"Running": True, "Health": {"Status": "healthy"}},
+        "HostConfig": {"RestartPolicy": {"Name": "unless-stopped"}},
+    }
+    monkeypatch.setattr(config, "http_get", lambda _address: b"ok")
+    assert config.check_services(
+        {"services": {"open-webui": service}}, {"open-webui": item}
+    )
+
+
+def test_http_failure_reports_only_path_and_status(monkeypatch):
+    """HTTP-диагностика не показывает credentials из URL и текст чужой ошибки."""
+    address = "http://user:private-password@localhost:8000/health"
+
+    def fail(*_args, **_kwargs):
+        """Имитирует HTTPError, содержащий закрытый URL."""
+        raise urllib.error.HTTPError(address, 503, "private-error-body", {}, None)
+
+    monkeypatch.setattr(config.urllib.request, "urlopen", fail)
+    with pytest.raises(config.ConfigError) as error:
+        config.http_get(address)
+    assert str(error.value) == "HTTP /health: сервер вернул код 503."
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Проверка Linux shell wrapper")
+def test_check_wrapper_continues_after_main_stack_failure(tmp_path):
+    """Ошибка основного stack не отменяет Docling/Ruff/pytest и сохраняет exit 1."""
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("Нужен Bash")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copy2(ROOT / "scripts/check.sh", scripts / "check.sh")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    python = binary / "python3"
+    python.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CHECK_TEST_CALLS"\n'
+        'if [ "$2" = "check" ]; then exit 1; fi\nexit 0\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    calls = tmp_path / "calls.txt"
+    env = {**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]}
+    env["CHECK_TEST_CALLS"] = str(calls)
+    result = subprocess.run(
+        [bash, str(scripts / "check.sh"), "--with-tests"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "scripts/config-check.py check",
+        "scripts/config-check.py docling-check",
+        "-m ruff check scripts tests",
+        "-m ruff format --check scripts tests",
+        "-B -m pytest -p no:cacheprovider -q",
+    ]
 
 
 def test_legacy_helper_migration_targets_only_existing_ai_services():

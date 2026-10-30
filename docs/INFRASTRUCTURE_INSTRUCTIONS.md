@@ -913,6 +913,15 @@ RabbitMQ проверяется реальной авторизацией сущ
 Management API, доступностью AMQP и наличием vhost из `RABBITMQ_REQUIRED_VHOSTS`.
 Проверка не создаёт vhost/users и не меняет passwords.
 
+Container health и соответствие Compose проверяются отдельно: `healthy` не
+отменяет реальное расхождение startup-полей. Не заданные в Compose
+`command`/`entrypoint` наследуются из image; `null` и пустой Docker argv
+сравниваются с учётом этой семантики. Диагностика показывает только имена
+отличающихся полей, HTTP endpoint/код, без command/env/response values.
+`check.sh` продолжает Docling и выбранные quality checks при ошибке основного
+stack и возвращает общий ненулевой код. Для запуска только evaluation project
+использовать `docling-prepare`/`docling-start`, как описано в README.
+
 Перед запуском:
 
 ```bash

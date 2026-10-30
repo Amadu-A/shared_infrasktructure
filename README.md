@@ -152,6 +152,17 @@ bootstrap/check. Для отдельной валидации и эксплуа�
 Rollback: вернуть прежний Docling Compose/image и закрытые deployment-параметры,
 повторить эту целевую команду и check. Основной stack при этом не пересоздаётся.
 
+Чтобы подготовить и поднять только Docling (не запускать общий bootstrap):
+
+    python3 scripts/config-check.py docling-validate --env-file .env --show-settings
+    python3 scripts/config-check.py docling-prepare --env-file .env
+    python3 scripts/config-check.py docling-start --env-file .env --wait-timeout 900
+    python3 scripts/config-check.py docling-check --env-file .env
+
+Если ключ пока хранится в `docling-eval/.env`, вместо `.env` во всех четырёх
+командах передать `docling-eval/.env`. Автоматически переносить секреты или
+копировать образец `.env.example` поверх существующего `.env` не требуется.
+
 ## Перезагрузка сервера
 
 Bootstrap только проверяет автозапуск Docker. Для всех сервисов сохранена политика
@@ -198,6 +209,23 @@ vhost не создаются и не изменяются. Секреты и п
     bash scripts/check.sh --with-tests
 
 Она последовательно запускает проверки Compose/контейнеров/API, Ruff и pytest.
+Ошибка одного этапа не отменяет остальные; при любом отказе итоговый exit code — 1.
+
+`healthy` означает успех container healthcheck, но не доказывает совпадение
+работающей конфигурации с Compose. Проверка сообщает отдельно несовпавшие поля
+`Image`, `Cmd`, `Entrypoint` или имена GPU-переменных; значения команд и secrets
+не печатаются. Не заданные в Compose `command`/`entrypoint` наследуются из image
+и сами по себе не считаются расхождением ([Compose specification](https://docs.docker.com/reference/compose-file/services/#entrypoint)).
+
+Если общий bootstrap завершился после `[OK] docling` с ошибками других сервисов,
+это не откатывает запущенный Docling. Для точной read-only диагностики:
+
+    bash scripts/check.sh
+    python3 scripts/config-check.py migration-plan
+
+`migration-plan` проверяет старые helper-mounts и совместимость параметров;
+контейнеры не меняет. Обнаруженное реальное расхождение устранять целевой
+процедурой из раздела обновления, а не массовым пересозданием healthy-сервисов.
 
 Отдельная проверка только настроек:
 
