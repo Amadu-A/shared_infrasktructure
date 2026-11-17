@@ -10,8 +10,8 @@ services:
     restart: unless-stopped
     init: true
 
-    mem_limit: 8g
-    cpus: 4.0
+    mem_limit: 12g
+    cpus: 12.0
     pids_limit: 512
 
     security_opt:
@@ -27,7 +27,7 @@ services:
       DOCLING_SERVE_ENABLE_UI: "true"
       DOCLING_SERVE_API_KEY: ${DOCLING_API_KEY:?Set DOCLING_API_KEY in the root .env or process environment}
       DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "false"
-      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "1"
+      DOCLING_SERVE_ENG_LOC_NUM_WORKERS: "2"
       DOCLING_SERVE_MAX_SYNC_WAIT: "600"
       DOCLING_SERVE_MAX_NUM_PAGES: "50"
       DOCLING_SERVE_MAX_FILE_SIZE: "52428800"
